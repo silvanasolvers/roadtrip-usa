@@ -351,6 +351,62 @@ api.post('/flights/refresh', (req, res) => {
     .catch(e => res.status(503).json({ ok: false, error: String(e.message || e) }))
 })
 
+// Automatic refresh so the board has current fares even when nobody opens it,
+// which is the point of a price watch: the numbers should already be fresh when
+// someone checks. Runs on startup and every FLIGHT_REFRESH_HOURS (default 12).
+// Failure is logged, never fatal — the board keeps serving the last good prices.
+//
+// The date grid spans the trip's flexible window (Aug-Oct 2026). Keep only
+// bookable dates here too: the script also filters, but leaving past dates in
+// makes the intent clearer and avoids pointless work.
+const REFRESH_ROUTES = {
+  outbound: {
+    from: 'BOG', to: 'LAS',
+    dates: ['2026-09-26', '2026-10-03', '2026-10-10', '2026-10-14',
+            '2026-10-17', '2026-10-24', '2026-10-31'],
+  },
+  returns: {
+    from: 'SFO', to: 'BOG',
+    dates: ['2026-10-17', '2026-10-24', '2026-10-25', '2026-10-28',
+            '2026-11-01', '2026-11-07'],
+  },
+  adults: 1,
+  targetCop: Number(process.env.FLIGHT_TARGET_COP) || 2000000,
+  // The road trip itself runs ~12 days; anything under a week is a date-grid
+  // artifact, not a real itinerary, and would fake the "cheapest" row.
+  minTripDays: 7,
+  maxTripDays: 28,
+}
+
+async function autoRefreshFlights(reason) {
+  if (!process.env.FLIGHT_PYTHON) {
+    console.log('[flights] sin FLIGHT_PYTHON: se omiten las consultas automáticas')
+    return
+  }
+  console.log(`[flights] consultando precios (${reason})…`)
+  try {
+    const out = await runFlightFetch(REFRESH_ROUTES)
+    await mutate(s => {
+      s.flights = {
+        updatedAt: new Date().toISOString(),
+        legs: out.legs || [],
+        combos: out.combos || [],
+        cheapestCombo: out.cheapestCombo || null,
+        rate: out.rate || null,
+        target: out.target || null,
+        error: (out.errors || []).length ? out.errors.join(' · ') : null,
+      }
+    })
+    const best = state.flights.cheapestCombo
+    console.log(`[flights] ${(out.legs || []).length} tramos, ${(out.combos || []).length} combos`
+      + (best ? `, mejor $${best.usd} (${best.outDate}→${best.retDate})` : '')
+      + (state.flights.target?.met ? ' — OBJETIVO ALCANZADO' : ''))
+  } catch (e) {
+    // Keep the previous good numbers rather than wiping them with an error.
+    console.error('[flights] fallo la consulta:', String(e.message || e))
+  }
+}
+
 app.use('/api', api)
 
 app.get('/files/:stored', (req, res) => {
@@ -407,4 +463,10 @@ process.on('uncaughtException', e => {
 
 seedIfEmpty().then(() => {
   app.listen(PORT, () => console.log(`roadtrip-usa escuchando en :${PORT}`))
+
+  // Refresh fares shortly after boot, then on an interval. Delayed a little so
+  // startup and the first health checks are not blocked by a network call.
+  const hours = Number(process.env.FLIGHT_REFRESH_HOURS) || 12
+  setTimeout(() => autoRefreshFlights('arranque'), 20000).unref?.()
+  setInterval(() => autoRefreshFlights('programada'), hours * 3600 * 1000).unref?.()
 })

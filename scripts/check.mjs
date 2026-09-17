@@ -50,6 +50,29 @@ ok('la primera parada es el aeropuerto de llegada (LAS)', /Harry Reid|Las Vegas/
 ok('la última parada es el aeropuerto de salida (SFO)', /SFO|San Francisco International/i.test(STOPS[STOPS.length - 1].place))
 ok('llegada y salida son aeropuertos distintos (open-jaw)', STOPS[0].id !== STOPS[STOPS.length - 1].id)
 
+// Una fecha ya pasada devuelve FlightsNotFound y pinta un error rojo inútil en
+// el tablero. El script las filtra, pero las listas de rutas tampoco deben
+// arrastrarlas. Se comprueba sobre el código de ambos, sin ejecutar red.
+{
+  const today = new Date().toISOString().slice(0, 10)
+  const pySrc = readFileSync(path.join(ROOT, 'scripts/fetch-flights.py'), 'utf8')
+  ok('el script de vuelos filtra fechas ya pasadas', /bookable\(|>\s*today/.test(pySrc))
+
+  const datesIn = s => [...s.matchAll(/'(20\d\d-\d\d-\d\d)'/g)].map(m => m[1])
+  const appSrc = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+  const refreshBlock = appSrc.split('const REFRESH = {')[1]?.split('\n}')[0] || ''
+  const routeDates = datesIn(refreshBlock)
+  // Las fechas del grid del viaje deben ser futuras, no del pasado.
+  const past = routeDates.filter(d => d < today)
+  ok('las fechas consultadas no están en el pasado', past.length === 0,
+    past.length ? `(pasadas: ${past.join(', ')})` : `(${routeDates.length} fechas)`)
+  ok('el tablero declara fechas para consultar', routeDates.length >= 4, `(${routeDates.length})`)
+
+  // Un viaje de 0-1 días deforma la fila "más barata"; debe haber un mínimo.
+  ok('el script exige una duración mínima de viaje', /minTripDays/.test(pySrc))
+  ok('el tablero envía duración mínima de viaje', /minTripDays/.test(appSrc))
+}
+
 console.log('\nChecklist y packing')
 ok('checklist con tareas reales', CHECKLIST_SEED.length >= 20, `(${CHECKLIST_SEED.length})`)
 ok('ids de checklist únicos', new Set(CHECKLIST_SEED.map(c => c.id)).size === CHECKLIST_SEED.length)

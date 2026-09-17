@@ -93,10 +93,18 @@ def main():
     delay = float(payload.get("delaySeconds", 0.4))
     target_cop = payload.get("targetCop")
 
+    # Only ask about dates that can still be booked. Querying past dates wastes
+    # calls and always returns FlightsNotFound, which then shows up as a scary
+    # error on the board even though nothing is actually wrong.
+    today = datetime.date.today().isoformat()
+
+    def bookable(dates):
+        return [d for d in dates if d > today]
+
     tasks = []
-    for date in outbound.get("dates", []):
+    for date in bookable(outbound.get("dates", [])):
         tasks.append(("out", outbound.get("from"), outbound.get("to"), date))
-    for date in returns.get("dates", []):
+    for date in bookable(returns.get("dates", [])):
         tasks.append(("ret", returns.get("from"), returns.get("to"), date))
 
     legs, errors = [], []
@@ -131,19 +139,27 @@ def main():
     legs.sort(key=lambda r: (r["leg"], r["date"]))
 
     # Combine every outbound with every valid return into an open-jaw estimate.
+    # A return only counts if the trip is a plausible length: combining "depart
+    # the 24th, come home the 24th" produces a 0-1 day "trip" that is an artifact
+    # of the date grid, not a real itinerary, and it distorts the cheapest row.
     outs = [l for l in legs if l["leg"] == "out"]
     rets = [l for l in legs if l["leg"] == "ret"]
+
+    min_days = int(payload.get("minTripDays", 5))
+    max_days = int(payload.get("maxTripDays", 30))
+
     combos = []
     for o in outs:
         for r in rets:
-            if r["date"] <= o["date"]:
-                continue  # a return can never leave before the outbound
+            days = (datetime.date.fromisoformat(r["date"])
+                    - datetime.date.fromisoformat(o["date"])).days
+            if days < min_days or days > max_days:
+                continue
             combos.append({
                 "usd": round(o["usd"] + r["usd"], 2),
                 "outDate": o["date"], "retDate": r["date"],
                 "outbound": o, "return": r,
-                "days": (datetime.date.fromisoformat(r["date"])
-                         - datetime.date.fromisoformat(o["date"])).days,
+                "days": days,
                 "stops": o["stops"] + r["stops"],
             })
     combos.sort(key=lambda c: (c["usd"], c["days"]))

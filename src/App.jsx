@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
@@ -763,10 +763,20 @@ function Packing({ state, send, me }) {
 // Multi-city cannot be read from Google via the library, so the board prices it
 // as two one-ways and combines them — which is also how it is usually bought.
 const REFRESH = {
-  outbound: { from: 'BOG', to: 'LAS', dates: ['2026-08-15', '2026-09-12', '2026-10-10', '2026-10-14', '2026-10-17'] },
-  returns: { from: 'SFO', to: 'BOG', dates: ['2026-10-25', '2026-10-28'] },
+  outbound: {
+    from: 'BOG', to: 'LAS',
+    dates: ['2026-09-26', '2026-10-03', '2026-10-10', '2026-10-14', '2026-10-17', '2026-10-24'],
+  },
+  returns: {
+    from: 'SFO', to: 'BOG',
+    dates: ['2026-10-24', '2026-10-25', '2026-10-28', '2026-11-01'],
+  },
   adults: 1,
   targetCop: TARGET_COP,
+  // The road trip runs about 12 days; a "trip" under a week is an artifact of
+  // the date grid, not a real itinerary.
+  minTripDays: 7,
+  maxTripDays: 28,
 }
 
 function Flights({ state, refresh, status }) {
@@ -778,11 +788,12 @@ function Flights({ state, refresh, status }) {
   const cheapest = combos[0] || null
   const [fetching, setFetching] = useState(false)
   const [msg, setMsg] = useState(null)
+  const autoTried = useRef(false)
 
   const cop = usd => rate ? `${Math.round(usd * rate).toLocaleString('en-US')} COP` : null
 
-  const askRefresh = async () => {
-    setFetching(true); setMsg(null)
+  const askRefresh = useCallback(async () => {
+    setFetching(true)
     try {
       const r = await fetch('/api/flights/refresh', {
         method: 'POST',
@@ -791,14 +802,26 @@ function Flights({ state, refresh, status }) {
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
-      setMsg(`Consultadas ${d.legs?.length || 0} fechas reales · ${d.combos?.length || 0} combinaciones.`)
+      setMsg(`✓ ${d.legs?.length || 0} fechas consultadas · ${d.combos?.length || 0} combinaciones`)
       await refresh(true)
     } catch (e) {
       setMsg('No se pudo consultar: ' + String(e.message || e))
     } finally {
       setFetching(false)
     }
-  }
+  }, [refresh])
+
+  // Opening the tab should show current fares, not whatever was cached days
+  // ago. The server also refreshes on its own; this covers the case of someone
+  // checking the board after a long gap.
+  useEffect(() => {
+    if (autoTried.current) return
+    const age = f.updatedAt ? Date.now() - new Date(f.updatedAt).getTime() : Infinity
+    if (age > 20 * 3600 * 1000) {
+      autoTried.current = true
+      askRefresh()
+    }
+  }, [f.updatedAt, askRefresh])
 
   const outs = legs.filter(l => l.leg === 'out').sort((a, b) => a.date.localeCompare(b.date))
   const rets = legs.filter(l => l.leg === 'ret').sort((a, b) => a.date.localeCompare(b.date))

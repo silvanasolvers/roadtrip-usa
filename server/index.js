@@ -103,21 +103,44 @@ app.use(express.json({ limit: '2mb' }))
 // ------------------------------------------------------------- flight bridge
 // Google Flights prices come from a Python bridge (fast-flights). Refreshes are
 // normally pushed by a scheduled job; the local endpoint is an optional path.
+//
+// The `error` listener is mandatory, not defensive: if the interpreter is
+// missing, spawn emits an unhandled 'error' event and Node kills the WHOLE
+// process — taking the board down because an optional price lookup failed.
+// A missing interpreter must degrade to a 503 on one endpoint, nothing more.
 function runFlightFetch(payload) {
   return new Promise((resolve, reject) => {
     const py = process.env.FLIGHT_PYTHON
     if (!py) return reject(new Error('FLIGHT_PYTHON no configurado'))
     const script = path.join(ROOT, 'scripts', 'fetch-flights.py')
     if (!fs.existsSync(script)) return reject(new Error('script de vuelos ausente'))
-    const child = spawn(py, [script], { cwd: ROOT })
-    let out = '', err = ''
+
+    let child
+    try {
+      child = spawn(py, [script], { cwd: ROOT })
+    } catch (e) {
+      return reject(new Error('no se pudo lanzar el intérprete: ' + e.message))
+    }
+
+    let out = '', err = '', settled = false
+    const done = (fn, v) => { if (!settled) { settled = true; fn(v) } }
+
+    child.on('error', e => done(reject, new Error(
+      `no se pudo ejecutar ${py}: ${e.code || e.message}. ` +
+      'Instala Python y fast-flights en la imagen (ver Dockerfile), ' +
+      'o deja que el monitor empuje precios vía /api/flights/push.')))
+
     child.stdout.on('data', d => { out += d })
     child.stderr.on('data', d => { err += d })
+
     child.on('close', code => {
-      if (code !== 0) return reject(new Error(err.slice(0, 400) || `exit ${code}`))
-      try { resolve(JSON.parse(out)) } catch (e) { reject(new Error('salida no-JSON: ' + out.slice(0, 200))) }
+      if (code !== 0) return done(reject, new Error(err.slice(0, 400) || `exit ${code}`))
+      try { done(resolve, JSON.parse(out)) }
+      catch { done(reject, new Error('salida no-JSON: ' + out.slice(0, 200))) }
     })
-    child.stdin.end(JSON.stringify(payload))
+
+    try { child.stdin.end(JSON.stringify(payload)) }
+    catch (e) { done(reject, new Error('no se pudo enviar el payload: ' + e.message)) }
   })
 }
 
@@ -371,6 +394,16 @@ async function seedIfEmpty() {
     }
   }
 }
+
+// Last-resort net: an unexpected throw anywhere (a stray unhandled rejection,
+// a broken optional integration) must never take the board offline for eight
+// people mid-trip. Log it and keep serving.
+process.on('unhandledRejection', e => {
+  console.error('[unhandledRejection]', e?.message || e)
+})
+process.on('uncaughtException', e => {
+  console.error('[uncaughtException]', e?.stack || e?.message || e)
+})
 
 seedIfEmpty().then(() => {
   app.listen(PORT, () => console.log(`roadtrip-usa escuchando en :${PORT}`))

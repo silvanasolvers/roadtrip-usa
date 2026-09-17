@@ -159,6 +159,34 @@ if (process.env.CHECK_API) {
     const f = await fetch(base + '/api/flights').then(r => r.json())
     ok('/api/flights responde', typeof f === 'object')
     ok('/api/flights expone objetivo en COP', 'target' in f || 'rate' in f)
+
+    // An optional integration (the Python price bridge) must never be able to
+    // take the board down. If the interpreter is missing, this endpoint has to
+    // fail on its own while /health and /api/state keep answering.
+    try {
+      const rr = await fetch(base + '/api/flights/refresh', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ outbound: { from: 'BOG', to: 'LAS', dates: ['2026-10-14'] } }),
+      })
+      const rb = await rr.text()
+      // Either it works, or it degrades cleanly — never a crash.
+      ok('la consulta de precios no tumba el servidor',
+        rr.status === 200 || rr.status === 503, `(HTTP ${rr.status})`)
+      if (rr.status === 503) {
+        const h2 = await fetch(base + '/health').then(r => r.json()).catch(() => null)
+        ok('el servidor sigue vivo tras fallar la consulta de precios', h2?.ok === true)
+        const s2 = await fetch(base + '/api/state').then(r => r.json()).catch(() => null)
+        ok('el tablero sigue sirviendo tras fallar la consulta de precios',
+          (s2?.checklist || []).length >= 20)
+        if (!/FLIGHT_PYTHON|python|fast-flights/i.test(rb)) {
+          ok('el error explica cómo habilitar la consulta', false, `(${rb.slice(0, 90)})`)
+        } else {
+          ok('el error explica cómo habilitar la consulta', true)
+        }
+      }
+    } catch (e) {
+      ok('la consulta de precios no tumba el servidor', false, `(${e.message})`)
+    }
   } catch (e) {
     ok('la API responde', false, `(${e.message})`)
   }

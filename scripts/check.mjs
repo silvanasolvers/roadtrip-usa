@@ -85,6 +85,33 @@ ok('menos transferencias que personas', transfers.length <= PEOPLE.length - 1, `
 console.log('\nArtefactos de despliegue')
 ok('Dockerfile presente (instala Python + fast-flights)', existsSync(path.join(ROOT, 'Dockerfile')))
 ok('requirements.txt presente (deps del puente de precios)', existsSync(path.join(ROOT, 'requirements.txt')))
+
+// Docker only sees files a COPY put in the stage before they are used. A RUN
+// that reads a file copied further down fails the build with "Could not open
+// requirements file" — a fast, opaque failure. Catch the ordering here.
+if (existsSync(path.join(ROOT, 'Dockerfile'))) {
+  const df = readFileSync(path.join(ROOT, 'Dockerfile'), 'utf8').split('\n')
+  const copiedIn = new Set()
+  const orderErrors = []
+  df.forEach((ln, i) => {
+    const s = ln.trim()
+    const cp = s.match(/^COPY\s+(.+?)\s+\S+\s*$/i)
+    if (cp && !cp[1].includes('--from=')) {
+      for (const tok of cp[1].split(/\s+/)) copiedIn.add(tok.replace(/^\.?\//, ''))
+      return
+    }
+    const rn = s.match(/^RUN\s+(.*)$/i)
+    if (rn) {
+      for (const ref of rn[1].matchAll(/-r\s+(\S+)/g)) {
+        const base = ref[1].replace(/^\.?\//, '')
+        if (!copiedIn.has(base)) orderErrors.push(`L${i + 1}: RUN usa ${ref[1]} sin COPY previo`)
+      }
+    }
+  })
+  ok('el Dockerfile copia los archivos antes de usarlos en un RUN',
+    orderErrors.length === 0, orderErrors.join(' | '))
+}
+
 ok('service worker presente', existsSync(path.join(ROOT, 'public/sw.js')))
 ok('manifest PWA presente', existsSync(path.join(ROOT, 'public/manifest.webmanifest')))
 ok('script de vuelos presente', existsSync(path.join(ROOT, 'scripts/fetch-flights.py')))

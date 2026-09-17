@@ -4,26 +4,32 @@
 # state and a documents upload API. It also needs Python with `fast-flights`
 # so the "Consultar precios" button and the daily monitor can query Google
 # Flights directly — without it the board would only ever show pushed prices.
+#
+# Debian (glibc), NOT Alpine: fast-flights pulls `primp`, a Rust extension with
+# prebuilt manylinux wheels but no musl wheel. On Alpine pip tries to compile it
+# from source and the image has no Rust toolchain, so the build fails at the pip
+# step. Debian slim installs it as a wheel in seconds.
 
-FROM node:22-alpine AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --no-audit --no-fund
 
-FROM node:22-alpine AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
-# Python + the Google Flights bridge. venv keeps it isolated from the system
-# interpreter, which is also what FLIGHT_PYTHON points at below.
-RUN apk add --no-cache tini python3 py3-pip \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 python3-venv python3-pip tini ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/ffenv \
+    && /opt/ffenv/bin/pip install --no-cache-dir --upgrade pip \
     && /opt/ffenv/bin/pip install --no-cache-dir \
          fast-flights typing_extensions primp selectolax \
     && find /opt/ffenv -name '__pycache__' -type d -prune -exec rm -rf {} + \
@@ -37,5 +43,5 @@ COPY --from=build /app/server ./server
 COPY --from=build /app/scripts ./scripts
 RUN mkdir -p /app/data/uploads
 EXPOSE 3000
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["npm", "start"]

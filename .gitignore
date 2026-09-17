@@ -1,6 +1,9 @@
 node_modules/
 dist/
-data/
+# Solo el directorio de datos de runtime, anclado a la raíz. Un patrón "data/"
+# sin barra inicial también captura src/data/, que es donde vive trip.js con
+# toda la ruta del viaje: el archivo no se subía y el build fallaba.
+/data/
 *.log
 .env
 .DS_Store

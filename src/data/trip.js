@@ -42,55 +42,105 @@ export const TRIP = {
 }
 
 // Google Flights solo cotiza vuelos dentro de una ventana de ~11 meses. Pedir
-// fechas más lejanas devuelve FlightsNotFound y un error rojo inútil en el
-// tablero. Estas funciones calculan el grid de fechas a consultar en tiempo de
-// ejecución — nunca hardcodeado — avanzando el horizonte solo conforme el viaje
-// se acerca.
+// fechas más lejanas devuelve FlightsNotFound y un error rojo inútil. Estas
+// funciones calculan el grid de fechas en tiempo de ejecución — nunca
+// hardcodeado — y exponen cuándo se va "acoplando" cada fecha conforme el
+// horizonte de reserva avanza.
 export const BOOKING_HORIZON_DAYS = 330
 
 export function daysUntil(dateStr, from = new Date()) {
   const d = new Date(`${dateStr}T00:00:00Z`)
-  return Math.round((d - from) / 86400000)
+  const f = new Date(from.toISOString().slice(0, 10) + 'T00:00:00Z')
+  return Math.round((d - f) / 86400000)
 }
 
-// Última fecha de salida que Google ya puede cotizar.
+// Última fecha que Google ya puede cotizar hoy.
 export function lastBookableDate(from = new Date()) {
   const d = new Date(from.getTime() + BOOKING_HORIZON_DAYS * 86400000)
   return d.toISOString().slice(0, 10)
 }
 
-// Grid de fechas a consultar. Requiere que el viaje COMPLETO (ida + duración)
-// entre en el horizonte de reserva, no solo la ida: si la salida se cotiza pero
-// el regreso no, el resultado son cero combinaciones y un error rojo inútil.
-// Devuelve [] mientras el viaje esté demasiado lejos, y crece solo al acercarse.
-export function bookingDateGrid(step = 7, from = new Date()) {
+export function addDays(dateStr, n) {
+  return new Date(new Date(`${dateStr}T00:00:00Z`).getTime() + n * 86400000)
+    .toISOString().slice(0, 10)
+}
+
+// PLAN COMPLETO de consulta: cada fecha de salida del viaje con su regreso, si
+// ya es consultable hoy, y la fecha exacta en que lo será. Es lo que el tablero
+// muestra para que se vea el horizonte acoplándose mes a mes, en vez de solo
+// decir "todavía no".
+export function bookingPlan(step = 1, from = new Date()) {
   const { from: start, to: end } = TRIP.dateWindow
   const len = TRIP.durationDays || 15
-  const limit = lastBookableDate(from)
+  const today = from.toISOString().slice(0, 10)
+  const horizon = lastBookableDate(from)
   const out = []
   const cur = new Date(`${start}T00:00:00Z`)
   const stop = new Date(`${end}T00:00:00Z`)
   while (cur <= stop) {
-    const d = cur.toISOString().slice(0, 10)
-    const ret = new Date(cur.getTime() + len * 86400000).toISOString().slice(0, 10)
-    // La ida Y su regreso deben ser cotizables.
-    if (d > limit || ret > limit) break
-    out.push(d)
+    const dep = cur.toISOString().slice(0, 10)
+    const ret = addDays(dep, len)
+    out.push({
+      dep, ret,
+      // La fecha se vuelve consultable cuando el horizonte alcanza el REGRESO:
+      // no basta con que la ida entre, porque entonces falta el vuelo de vuelta.
+      active: ret <= horizon,
+      opensOn: addDays(ret, -BOOKING_HORIZON_DAYS),
+      monthsAhead: Math.round((new Date(`${dep}T00:00:00Z`) - new Date(`${today}T00:00:00Z`)) / (30.44 * 86400000) * 10) / 10,
+    })
     cur.setUTCDate(cur.getUTCDate() + step)
   }
   return out
 }
 
-// Fecha de ida más temprana del viaje; es la que marca cuándo empieza a haber
-// algo que consultar. El tablero la usa para decir cuánto falta.
-export function firstBookableOutbound(from = new Date()) {
-  const limit = lastBookableDate(from)
-  const len = TRIP.durationDays || 15
-  const start = TRIP.dateWindow.from
-  // Última ida posible: la que aún deja el regreso dentro del horizonte.
-  const latest = new Date(new Date(`${limit}T00:00:00Z`).getTime() - len * 86400000)
-    .toISOString().slice(0, 10)
-  return latest < start ? null : start
+// Grid de fechas a consultar: solo las que ya son cotizables por completo.
+// Requiere que el viaje COMPLETO (ida + duración) entre en el horizonte; si la
+// salida se cotiza pero el regreso no, el resultado son cero combinaciones y un
+// error rojo inútil.
+export function bookingDateGrid(step = 1, from = new Date()) {
+  return bookingPlan(step, from).filter(f => f.active).map(f => f.dep)
+}
+
+// Cuándo aparece el primer precio consultable y cuántas fechas se van sumando
+// cada mes. Alimenta el aviso y el plan que ve el usuario: el punto es mostrar
+// el horizonte acoplándose solo, no un simple "todavía no".
+export function bookingTimeline(from = new Date()) {
+  const plan = bookingPlan(1, from)
+  const horizon = lastBookableDate(from)
+  const active = plan.filter(f => f.active)
+
+  // La primera fecha de salida se vuelve consultable cuando el horizonte alcanza
+  // su REGRESO (ida + duración): antes de eso falta el vuelo de vuelta.
+  const first = plan[0]
+
+  // Reparto por mes natural: cuántas fechas se estrenan en cada mes.
+  const byMonth = new Map()
+  for (const f of plan) {
+    const m = f.opensOn.slice(0, 7)
+    if (!byMonth.has(m)) byMonth.set(m, { month: m, newlyActive: 0, cumulative: 0 })
+    byMonth.get(m).newlyActive++
+  }
+  let cum = 0
+  const schedule = [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month))
+  for (const s of schedule) {
+    cum += s.newlyActive
+    s.cumulative = cum
+  }
+
+  return {
+    horizon,
+    today: from.toISOString().slice(0, 10),
+    totalDates: plan.length,
+    activeDates: active.length,
+    pendingDates: plan.length - active.length,
+    firstOutbound: first?.dep || null,
+    firstReturn: first?.ret || null,
+    firstFaresOn: first?.opensOn || null,
+    daysToFirstFares: first ? daysUntil(first.opensOn, from) : null,
+    // Mes en que el viaje completo queda consultable.
+    fullyBookableFrom: schedule.length ? schedule[schedule.length - 1].month : null,
+    schedule,
+  }
 }
 
 export const STOPS = [

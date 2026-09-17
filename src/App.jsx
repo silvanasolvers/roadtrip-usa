@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, bookingDateGrid, lastBookableDate, daysUntil } from './data/trip.js'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, bookingDateGrid, bookingPlan, bookingTimeline, addDays, daysUntil } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
 
@@ -772,20 +772,19 @@ function Packing({ state, send, me }) {
 // Dates are computed from the trip window, never hardcoded: Google Flights only
 // quotes ~11 months ahead, so a 2027 trip is not fully bookable yet and the grid
 // has to grow on its own as the window approaches.
-function buildRefresh() {
-  const outDates = bookingDateGrid(7)
+function buildRefresh(dayByDay = false) {
+  // Consulta por defecto con muestreo (cada 3 días) para no disparar cientos de
+  // búsquedas; el usuario puede pedir día por día cuando el viaje ya esté activo.
+  const step = dayByDay ? 1 : 3
+  const outDates = bookingDateGrid(step)
   const len = TRIP.durationDays || 15
-  const retDates = [...new Set(outDates.map(d => {
-    const x = new Date(`${d}T00:00:00Z`)
-    x.setUTCDate(x.getUTCDate() + len)
-    return x.toISOString().slice(0, 10)
-  }))]
+  const retDates = [...new Set(outDates.map(d => addDays(d, len)))]
   return {
     outbound: { from: 'BOG', to: 'LAS', dates: outDates },
     returns: { from: 'SFO', to: 'BOG', dates: retDates },
     adults: 1,
     targetCop: TARGET_COP,
-    // Every combination must be an actual 15-day trip, not an arbitrary pairing.
+    // Cada combinación debe ser un viaje real de 15 días, no un apareo arbitrario.
     minTripDays: len,
     maxTripDays: len,
   }
@@ -800,28 +799,24 @@ function Flights({ state, refresh, status }) {
   const cheapest = combos[0] || null
   const [fetching, setFetching] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [planOpen, setPlanOpen] = useState(false)
   const autoTried = useRef(false)
 
   const cop = usd => rate ? `${Math.round(usd * rate).toLocaleString('en-US')} COP` : null
 
-  // How far out fares can be quoted at all, and whether this trip fits inside it.
-  const grid = bookingDateGrid(7)
-  const bookable = grid.length > 0
-  const horizon = lastBookableDate()
-  // When fares will realistically start appearing: the horizon minus the trip
-  // length (the return has to fit too).
-  const opensAround = new Date(
-    new Date(`${horizon}T00:00:00Z`).getTime() - (TRIP.durationDays || 15) * 86400000
-  ).toISOString().slice(0, 10)
-  const daysToOpen = Math.max(0, daysUntil(opensAround))
+  // El plan completo de consulta: qué fechas ya se pueden buscar y cuándo se
+  // activa cada una. Es lo que muestra el horizonte acoplándose solo.
+  const timeline = useMemo(() => bookingTimeline(), [])
+  const plan = useMemo(() => bookingPlan(1), [])
+  const bookable = timeline.activeDates > 0
 
-  const askRefresh = useCallback(async () => {
+  const askRefresh = useCallback(async (dayByDay = false) => {
     setFetching(true)
     try {
       const r = await fetch('/api/flights/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildRefresh()),
+        body: JSON.stringify(buildRefresh(dayByDay)),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
@@ -834,9 +829,8 @@ function Flights({ state, refresh, status }) {
     }
   }, [refresh])
 
-  // Opening the tab should show current fares, not whatever was cached days
-  // ago. The server also refreshes on its own; this covers the case of someone
-  // checking the board after a long gap.
+  // Abrir la pestaña debe mostrar tarifas al día. El servidor también refresca
+  // por su cuenta; esto cubre el caso de entrar tras un hueco largo.
   useEffect(() => {
     if (autoTried.current || !bookable) return
     const age = f.updatedAt ? Date.now() - new Date(f.updatedAt).getTime() : Infinity
@@ -848,14 +842,18 @@ function Flights({ state, refresh, status }) {
 
   const outs = legs.filter(l => l.leg === 'out').sort((a, b) => a.date.localeCompare(b.date))
   const rets = legs.filter(l => l.leg === 'ret').sort((a, b) => a.date.localeCompare(b.date))
+  const fmtMonth = m => {
+    const [y, mm] = m.split('-')
+    return new Date(Date.UTC(Number(y), Number(mm) - 1, 1))
+      .toLocaleDateString('es-CO', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  }
 
   return (
     <>
       <div className="page-head">
         <h2>Vuelos</h2>
         <p>
-          Open-jaw: entran por Las Vegas, salen por San Francisco · precios reales de Google Flights
-          {' · '}{TRIP.durationDays} días en {TRIP.year}
+          Open-jaw: entran por Las Vegas, salen por San Francisco · {TRIP.durationDays} días en {TRIP.year}
         </p>
       </div>
 
@@ -884,9 +882,17 @@ function Flights({ state, refresh, status }) {
               </div>
             </div>
           )}
-          <button className="btn" disabled={fetching || !bookable} onClick={askRefresh}>
-            {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
-          </button>
+          <div className="rowflex" style={{ gap: 8 }}>
+            <button className="btn" disabled={fetching || !bookable} onClick={() => askRefresh(false)}>
+              {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
+            </button>
+            {bookable && (
+              <button className="btn btn-sm" disabled={fetching} onClick={() => askRefresh(true)}
+                title="Busca todas las fechas disponibles, no solo una muestra">
+                Día por día
+              </button>
+            )}
+          </div>
         </div>
 
         {rate && (
@@ -899,32 +905,70 @@ function Flights({ state, refresh, status }) {
 
         {msg && <div className={'alert ' + (msg.startsWith('No') ? '' : 'good')} style={{ marginTop: 12 }}><span>{msg.startsWith('No') ? '!' : '✓'}</span><div>{msg}</div></div>}
 
-        {/* Google Flights only quotes ~11 months ahead, and the round trip must
-            fit inside that window. For a 2027 trip the honest answer is "too
-            early" plus a date, not a red error or an empty table. */}
-        {!bookable ? (
-          <div className="alert info" style={{ marginTop: 12 }}>
-            <span>🕐</span>
-            <div>
-              <b>Todavía es muy pronto para cotizar.</b><br />
-              Google Flights publica tarifas con unos 11 meses de anticipación, y eso hoy
-              llega hasta el <b>{horizon}</b>. Como el viaje es de {TRIP.durationDays} días,
-              los precios empezarán a aparecer cuando la ida y el regreso entren juntos en
-              ese rango — alrededor del <b>{opensAround}</b>, es decir en unos{' '}
-              <b>{daysToOpen.toLocaleString('en-US')} días</b>.
-              <br /><br />
-              No hay que hacer nada mientras tanto: el tablero buscará solo cuando ya tenga
-              sentido y mostrará aquí las tarifas reales.
-            </div>
+        {/* El estado honesto: cuántas fechas ya se pueden consultar y cuándo se
+            activan las que faltan. Google Flights publica ~11 meses adelante, así
+            que el grid se acopla solo mes a mes en vez de fallar o quedar vacío. */}
+        <div className={'alert ' + (bookable ? 'good' : 'info')} style={{ marginTop: 12 }}>
+          <span>{bookable ? '✅' : '🕐'}</span>
+          <div>
+            {bookable ? (
+              <>
+                <b>{timeline.activeDates} de {timeline.totalDates} fechas ya se pueden consultar.</b><br />
+                Google Flights publica tarifas con unos 11 meses de anticipación (hoy hasta el{' '}
+                <b>{timeline.horizon}</b>), y la lista crece sola cada mes. Las{' '}
+                {timeline.pendingDates} fechas restantes se irán sumando hasta completarse en{' '}
+                <b>{fmtMonth(timeline.fullyBookableFrom)}</b>.
+              </>
+            ) : (
+              <>
+                <b>Los primeros precios aparecen el {timeline.firstFaresOn}</b> — en{' '}
+                <b>{timeline.daysToFirstFares} días</b>.<br />
+                Google Flights publica tarifas con unos 11 meses de anticipación y hoy llega hasta
+                el <b>{timeline.horizon}</b>. La primera salida del viaje es el{' '}
+                {timeline.firstOutbound} y su regreso el {timeline.firstReturn}: los dos deben
+                entrar en ese rango. Desde ahí el tablero irá sumando fechas solo, mes a mes,
+                hasta cubrir las {timeline.totalDates} salidas para{' '}
+                <b>{fmtMonth(timeline.fullyBookableFrom)}</b>. No hay que hacer nada.
+              </>
+            )}
+            <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={() => setPlanOpen(o => !o)}>
+              {planOpen ? 'Ocultar el plan de consulta' : 'Ver el plan de consulta fecha por fecha'}
+            </button>
           </div>
-        ) : !legs.length && !msg ? (
-          <div className="alert info" style={{ marginTop: 12 }}>
-            <span>✈️</span>
-            <div>Todavía no hay precios. Pulsa <b>Consultar precios</b> para traer tarifas reales de las fechas clave del viaje.</div>
-          </div>
-        ) : null}
-        {f.error && <div className="alert" style={{ marginTop: 12 }}><span>!</span><div>{f.error}</div></div>}
+        </div>
       </div>
+
+      {planOpen && (
+        <div className="card card-pad mb14">
+          <h3 style={{ fontSize: 15 }} className="mb8">Plan de consulta — {plan.length} fechas de salida</h3>
+          <p className="tiny dim mb14">
+            Cada fila es una salida con su regreso 15 días después. Las activas ya se pueden
+            consultar; las pendientes indican la fecha en que Google empezará a publicarlas.
+            {timeline.pendingDates > 0 && ` Se van sumando mes a mes hasta completarse.`}
+          </p>
+          <table className="tbl">
+            <thead>
+              <tr><th>Mes</th><th>Salida</th><th>Regreso (15 d)</th><th>Estado</th><th>Se activa</th></tr>
+            </thead>
+            <tbody>
+              {plan.map(p => (
+                <tr key={p.dep} style={p.active ? {} : { opacity: 0.62 }}>
+                  <td className="tiny">{fmtMonth(p.dep.slice(0, 7)).split(' de ')[0]}</td>
+                  <td className="mono">{p.dep}</td>
+                  <td className="mono">{p.ret}</td>
+                  <td>{p.active
+                    ? <span className="chip" style={{ borderColor: 'var(--sage)', color: 'var(--sage)' }}>activa</span>
+                    : <span className="chip">pendiente</span>}</td>
+                  <td className="tiny dim">{p.active ? '—' : p.opensOn}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {f.note && <div className="alert info mb14"><span>ℹ️</span><div>{f.note}</div></div>}
+      {f.error && <div className="alert mb14"><span>!</span><div>{f.error}</div></div>}
 
       {cheapest && (
         <div className="card card-pad mb14">

@@ -16,7 +16,7 @@ const ok = (label, cond, extra = '') => {
 const src = readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8')
 const mod = await import(path.join(ROOT, 'src/data/trip.js'))
 const { STOPS, PEOPLE, TRIP, CHECKLIST_SEED, PACKING_SEED, WIKI, TARGET_COP,
-        bookingDateGrid, lastBookableDate } = mod
+        bookingDateGrid, lastBookableDate, bookingPlan, bookingTimeline } = mod
 
 console.log('\nDatos de la ruta')
 ok('11 paradas cargadas', STOPS.length === 11, `(hay ${STOPS.length})`)
@@ -62,7 +62,9 @@ ok('la ventana de fechas es de 2027', TRIP.dateWindow.from.startsWith('2027-') &
 {
   const today = new Date()
   const limit = lastBookableDate(today)
-  const grid = bookingDateGrid(7, today)
+  const addDaysStr = (d, n) => new Date(new Date(`${d}T00:00:00Z`).getTime() + n * 86400000)
+    .toISOString().slice(0, 10)
+  const grid = bookingDateGrid(1, today)
   ok('el grid respeta el horizonte de reserva (~11 meses)',
     grid.every(d => d <= limit), `(horizonte ${limit}, ${grid.length} fechas)`)
   ok('el grid solo contiene fechas futuras', grid.every(d => d > today.toISOString().slice(0, 10)))
@@ -96,6 +98,32 @@ ok('la ventana de fechas es de 2027', TRIP.dateWindow.from.startsWith('2027-') &
   const pySrc = readFileSync(path.join(ROOT, 'scripts/fetch-flights.py'), 'utf8')
   ok('el script de vuelos filtra fechas ya pasadas', /bookable\(|>\s*today/.test(pySrc))
   ok('el script exige una duración mínima de viaje', /minTripDays/.test(pySrc))
+
+  // EL PLAN: el tablero debe mostrar qué fechas ya se consultan y cuándo se
+  // activan las demás — el horizonte acoplándose solo, no un simple "todavía no".
+  const tl = bookingTimeline(today)
+  const planAll = bookingPlan(1, today)
+  ok('el plan cubre todas las salidas de la ventana del viaje',
+    planAll.length === tl.totalDates && tl.totalDates > 30, `(${tl.totalDates} fechas)`)
+  ok('el plan marca activas + pendientes = total',
+    tl.activeDates + tl.pendingDates === tl.totalDates)
+  ok('el plan dice cuándo aparece el primer precio',
+    typeof tl.firstFaresOn === 'string' && Number.isFinite(tl.daysToFirstFares),
+    `(el ${tl.firstFaresOn}, en ${tl.daysToFirstFares} días)`)
+  ok('hay una primera salida y su regreso a 15 días',
+    tl.firstReturn === addDaysStr(tl.firstOutbound, TRIP.durationDays),
+    `(${tl.firstOutbound} -> ${tl.firstReturn})`)
+  // El acoplamiento mes a mes debe ser monótono y terminar en el total.
+  const sched = tl.schedule
+  ok('el acoplamiento mes a mes es monótono',
+    sched.every((s, i) => i === 0 || s.cumulative >= sched[i - 1].cumulative))
+  ok('el acoplamiento termina cubriendo todas las fechas',
+    sched.length > 0 && sched[sched.length - 1].cumulative === tl.totalDates,
+    `(termina en ${sched[sched.length - 1]?.cumulative}/${tl.totalDates} para ${tl.fullyBookableFrom})`)
+  // Una fecha no puede estar activa si su regreso cae fuera del horizonte.
+  const wronglyActive = planAll.filter(f => f.active && f.ret > limit)
+  ok('ninguna fecha marcada activa tiene el regreso fuera del horizonte',
+    wronglyActive.length === 0, wronglyActive.length ? `(${wronglyActive.map(f => f.dep).join(', ')})` : '')
 
   // Ninguna fecha de 2026 debe sobrevivir en los datos del viaje.
   const srcAll = readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8')

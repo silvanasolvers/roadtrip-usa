@@ -1,0 +1,13 @@
+# Dependencias del puente de precios (scripts/fetch-flights.py).
+#
+# nixpacks detecta este archivo y añade un proveedor Python al build, que es
+# lo que permite consultar Google Flights desde el servidor. Sin él, el
+# tablero sigue funcionando pero «Consultar precios» responde
+# "FLIGHT_PYTHON no configurado".
+#
+# Se necesita typing_extensions y primp explícitamente: son dependencias no
+# declaradas de fast-flights en algunas versiones.
+fast-flights
+typing_extensions
+primp
+selectolax

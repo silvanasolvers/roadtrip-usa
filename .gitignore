@@ -7,5 +7,6 @@ dist/
 *.log
 .env
 .DS_Store
-Dockerfile
-Dockerfile.*
+# El Dockerfile SÍ se versiona: es la vía de build que instala Python y
+# fast-flights para que «Consultar precios» funcione en el servidor.
+# (Estuvo ignorado durante el debugging; ya no.)

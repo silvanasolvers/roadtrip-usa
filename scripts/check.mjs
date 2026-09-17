@@ -83,6 +83,8 @@ ok('menos transferencias que personas', transfers.length <= PEOPLE.length - 1, `
 
 // -------------------------------------------------------------------- artifacts
 console.log('\nArtefactos de despliegue')
+ok('Dockerfile presente (instala Python + fast-flights)', existsSync(path.join(ROOT, 'Dockerfile')))
+ok('requirements.txt presente (deps del puente de precios)', existsSync(path.join(ROOT, 'requirements.txt')))
 ok('service worker presente', existsSync(path.join(ROOT, 'public/sw.js')))
 ok('manifest PWA presente', existsSync(path.join(ROOT, 'public/manifest.webmanifest')))
 ok('script de vuelos presente', existsSync(path.join(ROOT, 'scripts/fetch-flights.py')))

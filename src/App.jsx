@@ -2,10 +2,65 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, bookingDateGrid, bookingPlan, bookingTimeline, addDays, daysUntil } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
+import { Icon } from './lib/icons.jsx'
 
 // ---------------------------------------------------------------- primitives
 const byId = id => PEOPLE.find(p => p.id === id)
 const nameOf = id => byId(id)?.name || '—'
+
+// La traza de la ruta: la columna vertebral del tablero.
+//
+// Cada parada es un nodo sobre una línea de carretera, con su distancia real
+// desde la anterior. Es lo que hace que este tablero se reconozca como el plan
+// de ESTE viaje y no como una rejilla de indicadores genérica. Los tramos largos
+// se marcan porque son los que exigen madrugar.
+function RouteBoard({ dateLabel, go }) {
+  const long = 400 // millas a partir de las cuales el tramo pide atención
+  return (
+    <div className="route-board mb14">
+      <div className="route-head">
+        <div>
+          <div className="route-kicker">La ruta</div>
+          <div className="route-title">{STOPS.length} paradas · {TRIP.totalMiles.toLocaleString('en-US')} mi</div>
+        </div>
+        <button className="btn btn-sm" onClick={() => go('itinerary')}>
+          Ver itinerario <Icon name="arrowRight" size="sm" />
+        </button>
+      </div>
+
+      <ol className="route-track">
+        {STOPS.map((s, i) => {
+          const isLong = s.driveMiles >= long
+          return (
+            <li key={s.id} className={'route-stop' + (isLong ? ' is-long' : '')}>
+              <span className="route-node" aria-hidden="true">{i + 1}</span>
+              <div className="route-info">
+                <div className="route-name">{s.name}</div>
+                <div className="route-meta">
+                  {s.nights ? `${s.nights} noche${s.nights > 1 ? 's' : ''}` : s.state}
+                  {s.driveMiles ? (
+                    <span className="route-drive">
+                      {s.driveMiles} mi{s.driveHours ? ` · ${hm(s.driveHours)}` : ''}
+                      {isLong && ' · tramo largo'}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+
+      <div className="route-foot">
+        <Icon name="calendar" size="sm" />
+        <span>{dateLabel}</span>
+        <span className="route-scroll-hint">
+          Desliza <Icon name="arrowRight" size="sm" />
+        </span>
+      </div>
+    </div>
+  )
+}
 
 function Avatar({ id, size = 25 }) {
   const p = byId(id)
@@ -83,14 +138,20 @@ function Overview({ state, go }) {
     <>
       <div className="page-head">
         <h2>Roadtrip USA</h2>
-        <p>{TRIP.subtitle}</p>
+        {/* El recorrido ya lo cuenta la traza de abajo; repetirlo aquí era
+            ruido. En su lugar, el dato que sí orienta: cuándo es y cuánto dura. */}
+        <p>{TRIP.durationDays} días por el suroeste · {TRIP.year}</p>
       </div>
 
+      {/* La ruta es la identidad de este tablero: se dibuja como la traza de una
+          carretera con sus paradas reales. Antes esto era una rejilla de cifras
+          que podía pertenecer a cualquier producto. */}
+      <RouteBoard dateLabel={dateLabel} go={go} />
+
       <div className="grid g3 mb14">
-        <div className="stat"><div className="k">Fechas</div><div className="v" style={{ fontSize: 15 }}>{dateLabel}</div></div>
         <div className="stat"><div className="k">Duración</div><div className="v">{TRIP.durationDays} días</div></div>
-        <div className="stat"><div className="k">Distancia total</div><div className="v">{TRIP.totalMiles.toLocaleString('en-US')} mi</div></div>
-        <div className="stat"><div className="k">Manejo total</div><div className="v">{hm(TRIP.totalDriveHours)}</div></div>
+        <div className="stat"><div className="k">Distancia</div><div className="v">{TRIP.totalMiles.toLocaleString('en-US')} mi</div></div>
+        <div className="stat"><div className="k">Al volante</div><div className="v">{hm(TRIP.totalDriveHours)}</div></div>
         <div className="stat"><div className="k">Viajeros</div><div className="v">{PEOPLE.length}</div></div>
         <div className="stat"><div className="k">Paradas</div><div className="v">{STOPS.length}</div></div>
         <div className="stat"><div className="k">Faltan</div><div className="v">{daysUntil(TRIP.dateWindow.from).toLocaleString('en-US')} días</div></div>
@@ -98,7 +159,7 @@ function Overview({ state, go }) {
 
       {!dates?.startDate && (
         <div className="alert info mb14">
-          <span>🗓️</span>
+          <Icon name="calendar" size="md" />
           <div>
             <b>Fechas abiertas.</b> El viaje es de <b>{TRIP.durationDays} días</b> en {TRIP.year} y se
             mueve entre agosto y octubre según precios de vuelo. El tablero de <b>Vuelos</b> revisa
@@ -150,23 +211,23 @@ function Overview({ state, go }) {
         <h3 style={{ fontSize: 15 }} className="mb14">Advertencias críticas de esta ruta</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div className="alert">
-            <span>🎟️</span>
+            <Icon name="ticket" size="md" />
             <div><b>Zion / Angels Landing:</b> el permiso es obligatorio todos los días del año y se
               obtiene solo por lotería en Recreation.gov. La <b>estacional</b> hay que jugarla con
               meses de anticipación; queda la <b>day-before</b> (12:01 a.m.–3:00 p.m. hora de Utah
               del día anterior, resultados 4:00 p.m.). Las fechas de 2027 aún no se publican.</div>
           </div>
           <div className="alert">
-            <span>🚌</span>
+            <Icon name="shuttle" size="md" />
             <div><b>Zion Scenic Drive:</b> en temporada de shuttle (aprox. 7 mar – 28 nov) es solo
               shuttle. No hay excepción para carro propio. Se puede recorrer en bici.</div>
           </div>
           <div className="alert">
-            <span>🚐</span>
+            <Icon name="van" size="md" />
             <div><b>8 personas:</b> necesitan mínimo 2 vehículos con equipaje. Un solo carro no funciona.</div>
           </div>
           <div className="alert good">
-            <span>✅</span>
+            <Icon name="checkCircle" size="md" />
             <div><b>Yosemite:</b> los últimos años no exige timed-entry ni reserva de vehículo —
               solo pagar la entrada ($35/carro). Confirmar la política del año antes de viajar.</div>
           </div>
@@ -261,7 +322,7 @@ function Itinerary({ state, send, me }) {
 
                   {s.driveFromPrev && (
                     <div className="drive-strip mb14">
-                      <span>🚗 desde <b>{s.driveFromPrev}</b></span>
+                      <span className="row" style={{ gap: 5 }}><Icon name="van" size="sm" /> desde <b>{s.driveFromPrev}</b></span>
                       <span>·</span>
                       <span><b>{s.driveMiles} mi</b> ({km(s.driveMiles)} km)</span>
                       <span>·</span>
@@ -693,7 +754,7 @@ function Packing({ state, send, me }) {
       <>
         <div className="page-head"><h2>Packing list</h2></div>
         <div className="alert info">
-          <span>👤</span>
+          <Icon name="user" size="md" />
           <div>Elige quién eres arriba a la derecha para marcar tus propias cosas.</div>
         </div>
       </>
@@ -820,7 +881,7 @@ function Flights({ state, refresh, status }) {
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
-      setMsg(`✓ ${d.legs?.length || 0} fechas consultadas · ${d.combos?.length || 0} combinaciones`)
+      setMsg(`${d.legs?.length || 0} fechas consultadas · ${d.combos?.length || 0} combinaciones`)
       await refresh(true)
     } catch (e) {
       setMsg('No se pudo consultar: ' + String(e.message || e))
@@ -869,7 +930,7 @@ function Flights({ state, refresh, status }) {
               <div className="k">{target.met ? 'Objetivo alcanzado' : 'Brecha sobre el objetivo'}</div>
               <div className="v" style={{ color: target.met ? 'var(--sage)' : 'var(--sun)' }}>
                 {/* A partial push (target without a computed gap) must not render NaN. */}
-                {target.met ? '✓ sí'
+                {target.met ? 'alcanza'
                   : Number.isFinite(target.gapPct) ? `+${target.gapPct}%`
                   : '—'}
               </div>
@@ -884,7 +945,7 @@ function Flights({ state, refresh, status }) {
           )}
           <div className="rowflex" style={{ gap: 8 }}>
             <button className="btn" disabled={fetching || !bookable} onClick={() => askRefresh(false)}>
-              {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
+              {fetching ? <span className="spin" /> : <Icon name="refresh" size="sm" />} {fetching ? 'Consultando…' : 'Consultar precios'}
             </button>
             {bookable && (
               <button className="btn btn-sm" disabled={fetching} onClick={() => askRefresh(true)}
@@ -903,13 +964,18 @@ function Flights({ state, refresh, status }) {
           </div>
         )}
 
-        {msg && <div className={'alert ' + (msg.startsWith('No') ? '' : 'good')} style={{ marginTop: 12 }}><span>{msg.startsWith('No') ? '!' : '✓'}</span><div>{msg}</div></div>}
+        {msg && (
+          <div className={'alert ' + (msg.startsWith('No') ? '' : 'good')} style={{ marginTop: 12 }}>
+            <Icon name={msg.startsWith('No') ? 'alert' : 'checkCircle'} size="md" />
+            <div>{msg}</div>
+          </div>
+        )}
 
         {/* El estado honesto: cuántas fechas ya se pueden consultar y cuándo se
             activan las que faltan. Google Flights publica ~11 meses adelante, así
             que el grid se acopla solo mes a mes en vez de fallar o quedar vacío. */}
         <div className={'alert ' + (bookable ? 'good' : 'info')} style={{ marginTop: 12 }}>
-          <span>{bookable ? '✅' : '🕐'}</span>
+          <Icon name={bookable ? 'checkCircle' : 'clock'} size="lg" />
           <div>
             {bookable ? (
               <>
@@ -953,7 +1019,7 @@ function Flights({ state, refresh, status }) {
             <tbody>
               {plan.map(p => (
                 <tr key={p.dep} style={p.active ? {} : { opacity: 0.62 }}>
-                  <td className="tiny">{fmtMonth(p.dep.slice(0, 7)).split(' de ')[0]}</td>
+                  <td className="plan-month">{fmtMonth(p.dep.slice(0, 7)).split(' de ')[0]}</td>
                   <td className="mono">{p.dep}</td>
                   <td className="mono">{p.ret}</td>
                   <td>{p.active
@@ -967,8 +1033,8 @@ function Flights({ state, refresh, status }) {
         </div>
       )}
 
-      {f.note && <div className="alert info mb14"><span>ℹ️</span><div>{f.note}</div></div>}
-      {f.error && <div className="alert mb14"><span>!</span><div>{f.error}</div></div>}
+      {f.note && <div className="alert info mb14"><Icon name="info" size="md" /><div>{f.note}</div></div>}
+      {f.error && <div className="alert mb14"><Icon name="alert" size="md" /><div>{f.error}</div></div>}
 
       {cheapest && (
         <div className="card card-pad mb14">
@@ -1021,7 +1087,7 @@ function Flights({ state, refresh, status }) {
                       textAlign: 'right',
                       color: diff === null ? 'var(--txt-3)' : diff <= 0 ? 'var(--sage)' : 'var(--sun)',
                     }}>
-                      {diff === null ? '—' : diff <= 0 ? '✓ alcanza' : '+' + usd(diff)}
+                      {diff === null ? '—' : diff <= 0 ? 'alcanza' : '+' + usd(diff)}
                     </td>
                   </tr>
                 )
@@ -1097,12 +1163,12 @@ function Documents({ state, send, me, refresh }) {
       <div className="card card-pad mb14">
         <div className="row wrapflex">
           <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
-            {busy ? <span className="spin" /> : '↑'} Subir archivo
+            {busy ? <span className="spin" /> : <Icon name="download" size="sm" />} Subir archivo
             <input type="file" hidden onChange={onPick} accept=".pdf,.png,.jpg,.jpeg,.webp,.txt" />
           </label>
           <span className="tiny dim">PDF o imagen · máx 20 MB</span>
         </div>
-        {err && <div className="alert" style={{ marginTop: 12 }}><span>!</span><div>{err}</div></div>}
+        {err && <div className="alert" style={{ marginTop: 12 }}><Icon name="alert" size="md" /><div>{err}</div></div>}
         <div className="hint" style={{ marginTop: 12 }}>
           Descárguenlos en el celular antes del viaje: en los parques no hay señal.
         </div>
@@ -1116,7 +1182,7 @@ function Documents({ state, send, me, refresh }) {
           ? <div className="empty">Todavía no hay documentos. El primero que reserve algo, que suba el PDF aquí.</div>
           : [...state.docs].reverse().map(d => (
               <div className="item" key={d.id}>
-                <span style={{ fontSize: 19 }}>{d.mime?.includes('pdf') ? '📄' : '🖼️'}</span>
+                <Icon name={d.mime?.includes('pdf') ? 'file' : 'image'} size="lg" />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <a href={`/files/${d.stored}`} target="_blank" rel="noreferrer" className="lbl">{d.name}</a>
                   <div className="tiny dim">
@@ -1163,15 +1229,15 @@ function Wiki({ WIKI }) {
 
 // ------------------------------------------------------------------------ app
 const TABS = [
-  { id: 'home', label: 'Inicio', ic: '◎' },
-  { id: 'itinerary', label: 'Itinerario', ic: '≡' },
-  { id: 'map', label: 'Mapa', ic: '⌖' },
-  { id: 'flights', label: 'Vuelos', ic: '✈' },
-  { id: 'checklist', label: 'Checklist', ic: '☑' },
-  { id: 'expenses', label: 'Gastos', ic: '$' },
-  { id: 'packing', label: 'Maletas', ic: '🧳' },
-  { id: 'docs', label: 'Documentos', ic: '📄' },
-  { id: 'wiki', label: 'Info', ic: 'ℹ' },
+  { id: 'home', label: 'Inicio', ic: 'compass' },
+  { id: 'itinerary', label: 'Itinerario', ic: 'route' },
+  { id: 'map', label: 'Mapa', ic: 'pin' },
+  { id: 'flights', label: 'Vuelos', ic: 'plane' },
+  { id: 'checklist', label: 'Checklist', ic: 'clipboard' },
+  { id: 'expenses', label: 'Gastos', ic: 'wallet' },
+  { id: 'packing', label: 'Maletas', ic: 'luggage' },
+  { id: 'docs', label: 'Documentos', ic: 'file' },
+  { id: 'wiki', label: 'Info', ic: 'guidebook' },
 ]
 
 export default function App() {
@@ -1205,7 +1271,7 @@ export default function App() {
       <div className="topbar">
         <div className="topbar-in">
           <div className="brand">
-            <div className="brand-mark">🚐</div>
+            <div className="brand-mark"><Icon name="route" size="md" /></div>
             <div className="brand-txt">
               <h1>Roadtrip USA</h1>
               <p>Vegas → Page → Zion → Sequoia → Yosemite → Napa → SF</p>
@@ -1229,7 +1295,7 @@ export default function App() {
       <div className="wrap">
         {error && status === 'err' && (
           <div className="alert mb14">
-            <span>!</span>
+            <Icon name="alert" size="md" />
             <div>No pude sincronizar con el servidor: {error}. Los cambios podrían no estar guardados.</div>
           </div>
         )}
@@ -1248,9 +1314,11 @@ export default function App() {
       <nav className="tabs">
         {TABS.map(t => (
           <button key={t.id} className={'tab' + (tab === t.id ? ' on' : '')} onClick={() => go(t.id)}>
-            <span className="ic">{t.ic}</span>
-            <span>{t.label}</span>
-            {t.id === 'checklist' && pendingCount > 0 && <span className="badge">{pendingCount}</span>}
+            <Icon name={t.ic} size="md" />
+            <span className="tab-label">
+              {t.label}
+              {t.id === 'checklist' && pendingCount > 0 && <span className="badge">{pendingCount}</span>}
+            </span>
           </button>
         ))}
       </nav>

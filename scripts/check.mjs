@@ -313,5 +313,52 @@ if (process.env.CHECK_API) {
   }
 }
 
+console.log('\nSistema visual')
+{
+  const appSrcAll = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+  const cssSrc = readFileSync(path.join(ROOT, 'src/styles.css'), 'utf8')
+
+  // Una sola familia de iconos. Mezclar emoji a color con símbolos unicode se
+  // ve improvisado y se renderiza distinto en cada plataforma.
+  const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}]/gu
+  // U+2713 (✓) se excluye a propósito: es válido como marca de estado dentro
+  // de un checkbox. El resto de pictogramas a color no lo son.
+  const emojiHits = [...appSrcAll.matchAll(EMOJI)].map(m => m[0]).filter(c => c !== '\u2713')
+  ok('la interfaz no usa emoji como iconografía', emojiHits.length === 0,
+    emojiHits.length ? `(quedan: ${[...new Set(emojiHits)].join(' ')})` : '')
+
+  // Un check tipográfico DENTRO de un control (la marca del checkbox) es
+  // correcto y más nítido que un SVG. Como texto decorativo, no.
+  // '✓' solo es la marca de un checkbox (válido). '✓ algo' es decoración.
+  const decorativeChecks = [...appSrcAll.matchAll(/'✓[^']+'/g)].map(m => m[0])
+  ok('el check tipográfico solo vive dentro de controles', decorativeChecks.length === 0,
+    decorativeChecks.length ? `(decorativos: ${[...new Set(decorativeChecks)].join(' ')})` : '')
+
+  // Símbolos geométricos usados antes como iconos de la barra inferior.
+  const GLYPH = /◎|≡|⌖|☑/
+  ok('no quedan símbolos unicode sueltos como iconos', !GLYPH.test(appSrcAll))
+
+  ok('existe la familia de iconos SVG',
+    existsSync(path.join(ROOT, 'src/lib/icons.jsx')))
+  if (existsSync(path.join(ROOT, 'src/lib/icons.jsx'))) {
+    const ic = readFileSync(path.join(ROOT, 'src/lib/icons.jsx'), 'utf8')
+    // Todos los iconos comparten viewBox y heredan color, que es lo que los hace
+    // verse como un sistema y no como piezas sueltas.
+    ok('los iconos comparten viewBox 24 y currentColor',
+      /viewBox="0 0 24 24"/.test(ic) && /stroke="currentColor"/.test(ic))
+    // Cada pestaña debe apuntar a un icono existente, o el tab sale sin icono.
+    const tabIcons = [...appSrcAll.matchAll(/\{ id: '(\w+)', label: '[^']+', ic: '(\w+)' \}/g)]
+    const defined = new Set([...ic.matchAll(/^  (\w+):/gm)].map(m => m[1]))
+    const missing = tabIcons.filter(([, , name]) => !defined.has(name)).map(([, , n]) => n)
+    ok('todas las pestañas usan un icono definido', missing.length === 0,
+      missing.length ? `(faltan: ${missing.join(', ')})` : `(${tabIcons.length} pestañas)`)
+  }
+
+  // El color debe tener intención: un solo acento primario declarado.
+  ok('el sistema declara tokens de color', /--sun:/.test(cssSrc) && /--sage:/.test(cssSrc))
+  ok('respeta prefers-reduced-motion',
+    /prefers-reduced-motion/.test(cssSrc))
+}
+
 console.log(failures === 0 ? '\nTodo en orden.\n' : `\n${failures} fallo(s).\n`)
 process.exit(failures === 0 ? 0 : 1)

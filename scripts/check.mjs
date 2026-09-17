@@ -2,7 +2,7 @@
 // Smoke check for the roadtrip board: verifies route data integrity (every leg
 // has a distance/duration, ids unique, drive chain consistent), the money math
 // (settlement nets to zero), and the API contract against a running server.
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
@@ -83,13 +83,66 @@ ok('menos transferencias que personas', transfers.length <= PEOPLE.length - 1, `
 
 // -------------------------------------------------------------------- artifacts
 console.log('\nArtefactos de despliegue')
-ok('Dockerfile presente', existsSync(path.join(ROOT, 'Dockerfile')))
 ok('service worker presente', existsSync(path.join(ROOT, 'public/sw.js')))
 ok('manifest PWA presente', existsSync(path.join(ROOT, 'public/manifest.webmanifest')))
 ok('script de vuelos presente', existsSync(path.join(ROOT, 'scripts/fetch-flights.py')))
 const sw = readFileSync(path.join(ROOT, 'public/sw.js'), 'utf8')
 ok('el service worker no cachea escrituras', /request\.method !== 'GET'/.test(sw))
 ok('el service worker guarda el estado para uso offline', /api\/state/.test(sw))
+
+// Deploy runs from what git tracks, not from the local working tree. A
+// too-broad .gitignore entry (e.g. an unanchored `data/` matching `src/data/`)
+// silently ships an incomplete tree, and the failure only shows up as an
+// opaque build error on the server. Assert every source file is actually
+// tracked, and that the ignore rules cannot swallow a source directory.
+console.log('\nIntegridad del despliegue (lo que git realmente envía)')
+const { execFileSync } = await import('node:child_process')
+let tracked = []
+try {
+  tracked = execFileSync('git', ['-C', ROOT, 'ls-files'], { encoding: 'utf8' })
+    .split('\n').map(s => s.trim()).filter(Boolean)
+} catch { /* not a repo checkout; skip below */ }
+
+if (tracked.length) {
+  // Files the build and runtime genuinely need on the server.
+  const mustShip = [
+    'src/data/trip.js', 'src/App.jsx', 'src/main.jsx', 'src/styles.css',
+    'src/lib/money.js', 'src/lib/store.js',
+    'server/index.js', 'index.html', 'vite.config.js',
+    'package.json', 'package-lock.json',
+  ]
+  for (const f of mustShip) {
+    ok(`${f} está trackeado por git`, tracked.includes(f))
+  }
+
+  // Nothing in src/ may be excluded by .gitignore.
+  const onDiskInSrc = []
+  const walk = (dir, rel = '') => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name
+      if (e.isDirectory()) walk(path.join(dir, e.name), r)
+      else onDiskInSrc.push(`src/${r}`)
+    }
+  }
+  if (existsSync(path.join(ROOT, 'src'))) walk(path.join(ROOT, 'src'))
+  const notTracked = onDiskInSrc.filter(f => !tracked.includes(f))
+  ok('ningún archivo de src/ quedó fuera del repo', notTracked.length === 0,
+    notTracked.length ? `(fuera: ${notTracked.join(', ')})` : `(${onDiskInSrc.length} archivos)`)
+
+  // The trip data must survive a clean clone, since that is what builds the app.
+  ok('trip.js tiene contenido real en el repo', tracked.includes('src/data/trip.js'))
+
+  // Flag an unanchored ignore rule that would match a nested source dir.
+  const ig = existsSync(path.join(ROOT, '.gitignore'))
+    ? readFileSync(path.join(ROOT, '.gitignore'), 'utf8').split('\n')
+      .map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+    : []
+  const risky = ig.filter(r => r === 'data/' || r === 'src/' || r === 'lib/')
+  ok('el .gitignore no tiene reglas sin anclar que oculten código fuente',
+    risky.length === 0, risky.length ? `(riesgo: ${risky.join(', ')})` : '')
+} else {
+  console.log('  (sin checkout de git: se omite la verificación de archivos trackeados)')
+}
 
 // ------------------------------------------------------------------------- api
 if (process.env.CHECK_API) {

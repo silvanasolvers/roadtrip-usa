@@ -15,7 +15,8 @@ const ok = (label, cond, extra = '') => {
 // ---------------------------------------------------------------- route data
 const src = readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8')
 const mod = await import(path.join(ROOT, 'src/data/trip.js'))
-const { STOPS, PEOPLE, TRIP, CHECKLIST_SEED, PACKING_SEED, WIKI, TARGET_COP } = mod
+const { STOPS, PEOPLE, TRIP, CHECKLIST_SEED, PACKING_SEED, WIKI, TARGET_COP,
+        bookingDateGrid, lastBookableDate } = mod
 
 console.log('\nDatos de la ruta')
 ok('11 paradas cargadas', STOPS.length === 11, `(hay ${STOPS.length})`)
@@ -50,27 +51,69 @@ ok('la primera parada es el aeropuerto de llegada (LAS)', /Harry Reid|Las Vegas/
 ok('la última parada es el aeropuerto de salida (SFO)', /SFO|San Francisco International/i.test(STOPS[STOPS.length - 1].place))
 ok('llegada y salida son aeropuertos distintos (open-jaw)', STOPS[0].id !== STOPS[STOPS.length - 1].id)
 
-// Una fecha ya pasada devuelve FlightsNotFound y pinta un error rojo inútil en
-// el tablero. El script las filtra, pero las listas de rutas tampoco deben
-// arrastrarlas. Se comprueba sobre el código de ambos, sin ejecutar red.
+// El viaje es de 15 días en 2027. Si la duración o el año se desincronizan, el
+// tracker pide fechas equivocadas y el tablero muestra combinaciones absurdas.
+ok('la duración del viaje es 15 días', TRIP.durationDays === 15, `(${TRIP.durationDays})`)
+ok('el año del viaje es 2027', TRIP.year === 2027, `(${TRIP.year})`)
+ok('la ventana de fechas es de 2027', TRIP.dateWindow.from.startsWith('2027-') && TRIP.dateWindow.to.startsWith('2027-'))
+
+// Google Flights solo cotiza ~11 meses adelante. Pedir fechas más lejanas
+// devuelve FlightsNotFound y un error rojo inútil. El grid debe calcularse solo.
 {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = new Date()
+  const limit = lastBookableDate(today)
+  const grid = bookingDateGrid(7, today)
+  ok('el grid respeta el horizonte de reserva (~11 meses)',
+    grid.every(d => d <= limit), `(horizonte ${limit}, ${grid.length} fechas)`)
+  ok('el grid solo contiene fechas futuras', grid.every(d => d > today.toISOString().slice(0, 10)))
+
+  // BUG REAL: cotizar una ida cuyo regreso (+15 días) todavía no está en el
+  // horizonte devuelve la ida pero no el regreso — cero combinaciones y un error
+  // rojo en el tablero. El grid debe exigir que el viaje COMPLETO quepa.
+  const lenCheck = TRIP.durationDays
+  const returnsOutside = grid.filter(d => {
+    const ret = new Date(new Date(`${d}T00:00:00Z`).getTime() + lenCheck * 86400000)
+      .toISOString().slice(0, 10)
+    return ret > limit
+  })
+  ok('ninguna ida del grid deja su regreso fuera del horizonte', returnsOutside.length === 0,
+    returnsOutside.length ? `(idas sin regreso cotizable: ${returnsOutside.join(', ')})` : '')
+
+  // Los regresos deben salir exactamente 15 días después de cada ida.
+  const len = TRIP.durationDays
+  const rets = [...new Set(grid.map(d => {
+    const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + len)
+    return x.toISOString().slice(0, 10)
+  }))]
+  const bad = rets.filter((r, i) => {
+    const o = grid[i]
+    if (!o) return false
+    return Math.round((new Date(`${r}T00:00:00Z`) - new Date(`${o}T00:00:00Z`)) / 86400000) !== len
+  })
+  ok('cada regreso cae exactamente 15 días después de su ida', bad.length === 0,
+    bad.length ? `(mal: ${bad.join(', ')})` : `(${rets.length} regresos)`)
+
   const pySrc = readFileSync(path.join(ROOT, 'scripts/fetch-flights.py'), 'utf8')
   ok('el script de vuelos filtra fechas ya pasadas', /bookable\(|>\s*today/.test(pySrc))
-
-  const datesIn = s => [...s.matchAll(/'(20\d\d-\d\d-\d\d)'/g)].map(m => m[1])
-  const appSrc = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
-  const refreshBlock = appSrc.split('const REFRESH = {')[1]?.split('\n}')[0] || ''
-  const routeDates = datesIn(refreshBlock)
-  // Las fechas del grid del viaje deben ser futuras, no del pasado.
-  const past = routeDates.filter(d => d < today)
-  ok('las fechas consultadas no están en el pasado', past.length === 0,
-    past.length ? `(pasadas: ${past.join(', ')})` : `(${routeDates.length} fechas)`)
-  ok('el tablero declara fechas para consultar', routeDates.length >= 4, `(${routeDates.length})`)
-
-  // Un viaje de 0-1 días deforma la fila "más barata"; debe haber un mínimo.
   ok('el script exige una duración mínima de viaje', /minTripDays/.test(pySrc))
-  ok('el tablero envía duración mínima de viaje', /minTripDays/.test(appSrc))
+
+  // Ninguna fecha de 2026 debe sobrevivir en los datos del viaje.
+  const srcAll = readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8')
+    + readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+  const stale = [...srcAll.matchAll(/'(2026-\d\d-\d\d)'/g)].map(m => m[1])
+  ok('no quedan fechas de 2026 que pedir a Google Flights', stale.length === 0,
+    stale.length ? `(quedan: ${stale.join(', ')})` : '')
+}
+
+// Una fecha ya pasada devuelve FlightsNotFound y pinta un error rojo inútil en
+// el tablero. El script filtra, y el tablero ya no contiene fechas fijas: las
+// calcula con bookingDateGrid según el horizonte de reserva.
+{
+  const appSrc = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+  ok('el tablero calcula las fechas en vez de tenerlas fijas',
+    /bookingDateGrid\(/.test(appSrc) && !/const REFRESH = \{/.test(appSrc))
+  ok('el tablero envía la duración del viaje al consultar',
+    /minTripDays: len/.test(appSrc) || /minTripDays/.test(appSrc))
 }
 
 console.log('\nChecklist y packing')

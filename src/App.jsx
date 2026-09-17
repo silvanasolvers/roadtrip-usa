@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP } from './data/trip.js'
+import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, bookingDateGrid, lastBookableDate, daysUntil } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
 
@@ -88,19 +88,21 @@ function Overview({ state, go }) {
 
       <div className="grid g3 mb14">
         <div className="stat"><div className="k">Fechas</div><div className="v" style={{ fontSize: 15 }}>{dateLabel}</div></div>
+        <div className="stat"><div className="k">Duración</div><div className="v">{TRIP.durationDays} días</div></div>
         <div className="stat"><div className="k">Distancia total</div><div className="v">{TRIP.totalMiles.toLocaleString('en-US')} mi</div></div>
         <div className="stat"><div className="k">Manejo total</div><div className="v">{hm(TRIP.totalDriveHours)}</div></div>
         <div className="stat"><div className="k">Viajeros</div><div className="v">{PEOPLE.length}</div></div>
         <div className="stat"><div className="k">Paradas</div><div className="v">{STOPS.length}</div></div>
-        <div className="stat"><div className="k">Fondo común</div><div className="v">{usd(bal.total)}</div></div>
+        <div className="stat"><div className="k">Faltan</div><div className="v">{daysUntil(TRIP.dateWindow.from).toLocaleString('en-US')} días</div></div>
       </div>
 
       {!dates?.startDate && (
         <div className="alert info mb14">
           <span>🗓️</span>
           <div>
-            <b>Fechas abiertas.</b> El viaje se mueve entre agosto y octubre según precios de vuelo.
-            El tablero de <b>Vuelos</b> revisa tarifas y marca los días más baratos para decidir.
+            <b>Fechas abiertas.</b> El viaje es de <b>{TRIP.durationDays} días</b> en {TRIP.year} y se
+            mueve entre agosto y octubre según precios de vuelo. El tablero de <b>Vuelos</b> revisa
+            tarifas y marca los días más baratos para decidir.
           </div>
         </div>
       )}
@@ -149,12 +151,15 @@ function Overview({ state, go }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
           <div className="alert">
             <span>🎟️</span>
-            <div><b>Zion / Angels Landing:</b> la lotería estacional de otoño ya cerró (20 jul 2026).
-              Solo queda la <b>day-before</b>: aplican entre 12:01 a.m. y 3:00 p.m. MT del día anterior.</div>
+            <div><b>Zion / Angels Landing:</b> el permiso es obligatorio todos los días del año y se
+              obtiene solo por lotería en Recreation.gov. La <b>estacional</b> hay que jugarla con
+              meses de anticipación; queda la <b>day-before</b> (12:01 a.m.–3:00 p.m. hora de Utah
+              del día anterior, resultados 4:00 p.m.). Las fechas de 2027 aún no se publican.</div>
           </div>
           <div className="alert">
             <span>🚌</span>
-            <div><b>Zion Scenic Drive:</b> solo shuttle del 7 mar al 28 nov 2026. No hay excepción para carro propio.</div>
+            <div><b>Zion Scenic Drive:</b> en temporada de shuttle (aprox. 7 mar – 28 nov) es solo
+              shuttle. No hay excepción para carro propio. Se puede recorrer en bici.</div>
           </div>
           <div className="alert">
             <span>🚐</span>
@@ -162,7 +167,8 @@ function Overview({ state, go }) {
           </div>
           <div className="alert good">
             <span>✅</span>
-            <div><b>Yosemite 2026:</b> sin timed-entry ni reserva de vehículo. Solo pagar la entrada ($35/carro).</div>
+            <div><b>Yosemite:</b> los últimos años no exige timed-entry ni reserva de vehículo —
+              solo pagar la entrada ($35/carro). Confirmar la política del año antes de viajar.</div>
           </div>
         </div>
       </div>
@@ -762,21 +768,27 @@ function Packing({ state, send, me }) {
 // The trip is an open-jaw: they fly into Las Vegas and home from San Francisco.
 // Multi-city cannot be read from Google via the library, so the board prices it
 // as two one-ways and combines them — which is also how it is usually bought.
-const REFRESH = {
-  outbound: {
-    from: 'BOG', to: 'LAS',
-    dates: ['2026-09-26', '2026-10-03', '2026-10-10', '2026-10-14', '2026-10-17', '2026-10-24'],
-  },
-  returns: {
-    from: 'SFO', to: 'BOG',
-    dates: ['2026-10-24', '2026-10-25', '2026-10-28', '2026-11-01'],
-  },
-  adults: 1,
-  targetCop: TARGET_COP,
-  // The road trip runs about 12 days; a "trip" under a week is an artifact of
-  // the date grid, not a real itinerary.
-  minTripDays: 7,
-  maxTripDays: 28,
+//
+// Dates are computed from the trip window, never hardcoded: Google Flights only
+// quotes ~11 months ahead, so a 2027 trip is not fully bookable yet and the grid
+// has to grow on its own as the window approaches.
+function buildRefresh() {
+  const outDates = bookingDateGrid(7)
+  const len = TRIP.durationDays || 15
+  const retDates = [...new Set(outDates.map(d => {
+    const x = new Date(`${d}T00:00:00Z`)
+    x.setUTCDate(x.getUTCDate() + len)
+    return x.toISOString().slice(0, 10)
+  }))]
+  return {
+    outbound: { from: 'BOG', to: 'LAS', dates: outDates },
+    returns: { from: 'SFO', to: 'BOG', dates: retDates },
+    adults: 1,
+    targetCop: TARGET_COP,
+    // Every combination must be an actual 15-day trip, not an arbitrary pairing.
+    minTripDays: len,
+    maxTripDays: len,
+  }
 }
 
 function Flights({ state, refresh, status }) {
@@ -792,13 +804,24 @@ function Flights({ state, refresh, status }) {
 
   const cop = usd => rate ? `${Math.round(usd * rate).toLocaleString('en-US')} COP` : null
 
+  // How far out fares can be quoted at all, and whether this trip fits inside it.
+  const grid = bookingDateGrid(7)
+  const bookable = grid.length > 0
+  const horizon = lastBookableDate()
+  // When fares will realistically start appearing: the horizon minus the trip
+  // length (the return has to fit too).
+  const opensAround = new Date(
+    new Date(`${horizon}T00:00:00Z`).getTime() - (TRIP.durationDays || 15) * 86400000
+  ).toISOString().slice(0, 10)
+  const daysToOpen = Math.max(0, daysUntil(opensAround))
+
   const askRefresh = useCallback(async () => {
     setFetching(true)
     try {
       const r = await fetch('/api/flights/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(REFRESH),
+        body: JSON.stringify(buildRefresh()),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
@@ -815,13 +838,13 @@ function Flights({ state, refresh, status }) {
   // ago. The server also refreshes on its own; this covers the case of someone
   // checking the board after a long gap.
   useEffect(() => {
-    if (autoTried.current) return
+    if (autoTried.current || !bookable) return
     const age = f.updatedAt ? Date.now() - new Date(f.updatedAt).getTime() : Infinity
     if (age > 20 * 3600 * 1000) {
       autoTried.current = true
       askRefresh()
     }
-  }, [f.updatedAt, askRefresh])
+  }, [f.updatedAt, askRefresh, bookable])
 
   const outs = legs.filter(l => l.leg === 'out').sort((a, b) => a.date.localeCompare(b.date))
   const rets = legs.filter(l => l.leg === 'ret').sort((a, b) => a.date.localeCompare(b.date))
@@ -830,7 +853,10 @@ function Flights({ state, refresh, status }) {
     <>
       <div className="page-head">
         <h2>Vuelos</h2>
-        <p>Open-jaw: entran por Las Vegas, salen por San Francisco · precios reales de Google Flights</p>
+        <p>
+          Open-jaw: entran por Las Vegas, salen por San Francisco · precios reales de Google Flights
+          {' · '}{TRIP.durationDays} días en {TRIP.year}
+        </p>
       </div>
 
       <div className="card card-pad mb14">
@@ -858,7 +884,7 @@ function Flights({ state, refresh, status }) {
               </div>
             </div>
           )}
-          <button className="btn" disabled={fetching} onClick={askRefresh}>
+          <button className="btn" disabled={fetching || !bookable} onClick={askRefresh}>
             {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
           </button>
         </div>
@@ -872,12 +898,31 @@ function Flights({ state, refresh, status }) {
         )}
 
         {msg && <div className={'alert ' + (msg.startsWith('No') ? '' : 'good')} style={{ marginTop: 12 }}><span>{msg.startsWith('No') ? '!' : '✓'}</span><div>{msg}</div></div>}
-        {!msg && !legs.length && (
+
+        {/* Google Flights only quotes ~11 months ahead, and the round trip must
+            fit inside that window. For a 2027 trip the honest answer is "too
+            early" plus a date, not a red error or an empty table. */}
+        {!bookable ? (
+          <div className="alert info" style={{ marginTop: 12 }}>
+            <span>🕐</span>
+            <div>
+              <b>Todavía es muy pronto para cotizar.</b><br />
+              Google Flights publica tarifas con unos 11 meses de anticipación, y eso hoy
+              llega hasta el <b>{horizon}</b>. Como el viaje es de {TRIP.durationDays} días,
+              los precios empezarán a aparecer cuando la ida y el regreso entren juntos en
+              ese rango — alrededor del <b>{opensAround}</b>, es decir en unos{' '}
+              <b>{daysToOpen.toLocaleString('en-US')} días</b>.
+              <br /><br />
+              No hay que hacer nada mientras tanto: el tablero buscará solo cuando ya tenga
+              sentido y mostrará aquí las tarifas reales.
+            </div>
+          </div>
+        ) : !legs.length && !msg ? (
           <div className="alert info" style={{ marginTop: 12 }}>
             <span>✈️</span>
             <div>Todavía no hay precios. Pulsa <b>Consultar precios</b> para traer tarifas reales de las fechas clave del viaje.</div>
           </div>
-        )}
+        ) : null}
         {f.error && <div className="alert" style={{ marginTop: 12 }}><span>!</span><div>{f.error}</div></div>}
       </div>
 

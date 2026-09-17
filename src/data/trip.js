@@ -27,8 +27,11 @@ export const TRIP = {
   title: 'Roadtrip USA',
   subtitle: 'Las Vegas → Page → Zion → Sequoia → Yosemite → Napa → San Francisco',
   originAirports: ['BOG', 'MDE'],
-  // Las fechas son flexibles: se están esperando buenos precios.
-  dateWindow: { from: '2026-08-01', to: '2026-10-31' },
+  year: 2027,
+  // 15 días de viaje. Las fechas exactas siguen flexibles: se esperan buenos
+  // precios, pero la duración ya está definida.
+  durationDays: 15,
+  dateWindow: { from: '2027-08-01', to: '2027-10-31' },
   routeUrl: 'https://maps.app.goo.gl/x5T75ni1JyGSMEra6',
   totalMiles: 1368,
   totalDriveHours: 28.7,
@@ -36,6 +39,58 @@ export const TRIP = {
   // LAS, salen por SFO), así que se compara contra la suma de los dos trayectos.
   targetCop: 2000000,
   currencies: { copPerUsdFallback: 3114 },
+}
+
+// Google Flights solo cotiza vuelos dentro de una ventana de ~11 meses. Pedir
+// fechas más lejanas devuelve FlightsNotFound y un error rojo inútil en el
+// tablero. Estas funciones calculan el grid de fechas a consultar en tiempo de
+// ejecución — nunca hardcodeado — avanzando el horizonte solo conforme el viaje
+// se acerca.
+export const BOOKING_HORIZON_DAYS = 330
+
+export function daysUntil(dateStr, from = new Date()) {
+  const d = new Date(`${dateStr}T00:00:00Z`)
+  return Math.round((d - from) / 86400000)
+}
+
+// Última fecha de salida que Google ya puede cotizar.
+export function lastBookableDate(from = new Date()) {
+  const d = new Date(from.getTime() + BOOKING_HORIZON_DAYS * 86400000)
+  return d.toISOString().slice(0, 10)
+}
+
+// Grid de fechas a consultar. Requiere que el viaje COMPLETO (ida + duración)
+// entre en el horizonte de reserva, no solo la ida: si la salida se cotiza pero
+// el regreso no, el resultado son cero combinaciones y un error rojo inútil.
+// Devuelve [] mientras el viaje esté demasiado lejos, y crece solo al acercarse.
+export function bookingDateGrid(step = 7, from = new Date()) {
+  const { from: start, to: end } = TRIP.dateWindow
+  const len = TRIP.durationDays || 15
+  const limit = lastBookableDate(from)
+  const out = []
+  const cur = new Date(`${start}T00:00:00Z`)
+  const stop = new Date(`${end}T00:00:00Z`)
+  while (cur <= stop) {
+    const d = cur.toISOString().slice(0, 10)
+    const ret = new Date(cur.getTime() + len * 86400000).toISOString().slice(0, 10)
+    // La ida Y su regreso deben ser cotizables.
+    if (d > limit || ret > limit) break
+    out.push(d)
+    cur.setUTCDate(cur.getUTCDate() + step)
+  }
+  return out
+}
+
+// Fecha de ida más temprana del viaje; es la que marca cuándo empieza a haber
+// algo que consultar. El tablero la usa para decir cuánto falta.
+export function firstBookableOutbound(from = new Date()) {
+  const limit = lastBookableDate(from)
+  const len = TRIP.durationDays || 15
+  const start = TRIP.dateWindow.from
+  // Última ida posible: la que aún deja el regreso dentro del horizonte.
+  const latest = new Date(new Date(`${limit}T00:00:00Z`).getTime() - len * 86400000)
+    .toISOString().slice(0, 10)
+  return latest < start ? null : start
 }
 
 export const STOPS = [
@@ -111,9 +166,9 @@ export const STOPS = [
       'Emerald Pools / Watchman Trail si el tiempo aprieta',
     ],
     warnings: [
-      'CRÍTICO: del 7 mar al 28 nov 2026 el Scenic Drive es SOLO shuttle. No hay excepción para carro propio, ni llegando temprano.',
-      'CRÍTICO: la lotería ESTACIONAL de otoño (1 sep–30 nov) abrió el 1 jul y cerró el 20 jul 2026 — ya cerró. Solo queda la lotería DAY-BEFORE: se aplica de 12:01 a.m. a 3:00 p.m. MT del día anterior, resultados a las 4:00 p.m. MT.',
-      'Angels Landing necesita permiso TODOS los días del año, sin excepción de temporada o de poca gente. Sin permiso hay multa.',
+      'CRÍTICO: durante la temporada de shuttle (aprox. 7 mar – 28 nov) el Scenic Drive es SOLO shuttle. No hay excepción para carro propio, ni llegando temprano.',
+      'CRÍTICO — Angels Landing exige permiso TODOS los días del año, sin excepción. Hay dos loterías en Recreation.gov: la ESTACIONAL (se aplica con meses de anticipación) y la DAY-BEFORE (12:01 a.m. a 3:00 p.m. hora de Utah del día anterior, resultados 4:00 p.m.). Si van en temporada alta, entren a la lotería estacional en cuanto abra: los cupos se agotan.',
+      'Las fechas exactas de 2027 aún no están publicadas. En 2026 la lotería estacional funcionó así: feb para mar–may, abr para jun–ago, jul para sep–nov, oct para dic–feb. El calendario se replica cada año, así que hay que revisar Recreation.gov unos 6 meses antes.',
       'El permiso es intransferible y el titular debe estar presente. No se consigue en oficinas del parque, solo online en Recreation.gov.',
       'Todos deben empezar juntos en el Grotto Trailhead. El permiso es de un solo día.',
       'Sin señal en el sendero: guardar el permiso en el celular ANTES de subir.',
@@ -219,7 +274,7 @@ export const STOPS = [
       'Hike a Vernal/Nevada Fall si el grupo está en forma',
     ],
     warnings: [
-      'BUENA NOTICIA: para 2026 Yosemite NO exige timed-entry ni reserva de vehículo. Se entra pagando la entrada.',
+      'Yosemite: los últimos años no exige timed-entry ni reserva de vehículo (se entra pagando la entrada), pero la política se revisa cada año — confirmar antes de viajar.',
       'PERO el parqueadero del valle se llena a media mañana. Entrar temprano es obligatorio en la práctica.',
       'El parque es 100% cashless.',
       'El shuttle del valle es gratis y es la mejor forma de moverse sin pelear por parqueadero.',
@@ -386,10 +441,10 @@ export const WIKI = [
     id: 'parques',
     title: 'Reglas de parques nacionales',
     items: [
-      'Yosemite 2026: sin timed-entry ni reserva de vehículo. Entrada $35/carro, cashless.',
+      'Yosemite: entrada $35/carro, 100% cashless. Los últimos años no exige timed-entry; confirmar la política del año antes de viajar.',
       'Sequoia & Kings Canyon: sin timed-entry. Entrada $35/carro cubre ambos, válida 7 días, cashless.',
-      'Zion: el Scenic Drive es solo shuttle del 7 mar al 28 nov 2026, sin excepción.',
-      'Zion / Angels Landing: permiso obligatorio todos los días, solo online en Recreation.gov, intransferible.',
+      'Zion: en temporada de shuttle (aprox. 7 mar – 28 nov) el Scenic Drive es solo shuttle, sin excepción. Se puede hacer en bici.',
+      'Zion / Angels Landing: permiso obligatorio todos los días, solo online en Recreation.gov, intransferible. Entrar a la lotería estacional con meses de anticipación.',
       'Antelope Canyon (Page): solo con tour guiado de operadores Navajo. Sin drones, trípodes ni bolsos grandes.',
       'America the Beautiful pass: vale la pena si van a 3+ parques. Cubre la entrada, no camping ni tours.',
       'Todos los parques: no dejar comida en el carro visible (animales), no salirse del sendero, no drones.',

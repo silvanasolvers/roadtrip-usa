@@ -18,9 +18,15 @@ way to fly open-jaw, so this is a competitive estimate rather than a worse one.
 The combined figure is labelled as such in the API and the UI.
 
 Reads JSON on stdin:
-  {"outbound": {"from":"BOG","to":"LAS","dates":["2026-10-10", ...]},
-   "returns":  {"from":"SFO","to":"BOG","dates":["2026-10-28", ...]},
-   "adults": 1, "currency": "USD", "targetCop": 2000000}
+  {"outbound": {"from":"BOG","to":"LAS","dates":["2027-08-05", ...]},
+   "returns":  {"from":"SFO","to":"BOG","dates":["2027-08-20", ...]},
+   "adults": 1, "currency": "USD", "targetCop": 2000000,
+   "minTripDays": 15, "maxTripDays": 15}
+
+Dates are supplied by the caller and are computed from the trip window, never
+hardcoded here. Google Flights only quotes roughly 11 months ahead, so for a
+trip further out the caller sends no dates and this script simply returns empty
+results instead of an error.
 
 Writes JSON on stdout:
   {"legs": [...], "combos": [...], "cheapestCombo": {...},

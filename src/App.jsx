@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
-import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, bookingDateGrid, bookingPlan, bookingTimeline, addDays, daysUntil } from './data/trip.js'
+import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, PHOTOS, bookingDateGrid, bookingPlan, bookingTimeline, addDays, daysUntil } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
 import { Icon } from './lib/icons.jsx'
@@ -8,7 +8,99 @@ import { Icon } from './lib/icons.jsx'
 const byId = id => PEOPLE.find(p => p.id === id)
 const nameOf = id => byId(id)?.name || '—'
 
-// La traza de la ruta: la columna vertebral del tablero.
+// La portada. Es lo primero que se ve y lo que decide si esto se siente como el
+// plan de un viaje o como un panel de datos. Va con una foto real del paisaje
+// (Monument Valley, el corazón del suroeste) y las cifras encima, no en tarjetas
+// sueltas que podrían ser de cualquier producto.
+function Hero({ dateLabel, go }) {
+  const days = daysUntil(TRIP.dateWindow.from)
+  return (
+    <section className="hero">
+      <img className="hero-img" src={PHOTOS.hero} alt="" aria-hidden="true" />
+      <div className="hero-veil" />
+      <div className="hero-body">
+        <div className="hero-kicker">Suroeste de Estados Unidos · {TRIP.year}</div>
+        <h1 className="hero-title">Roadtrip USA</h1>
+        <p className="hero-sub">
+          {STOPS.length} paradas de Las Vegas a San Francisco · {TRIP.totalMiles.toLocaleString('en-US')} mi
+          · {TRIP.durationDays} días
+        </p>
+        <div className="hero-actions">
+          <button className="btn btn-primary" onClick={() => go('itinerary')}>
+            Ver el itinerario <Icon name="arrowRight" size="sm" />
+          </button>
+          <button className="btn btn-ghost-inv" onClick={() => go('flights')}>
+            <Icon name="plane" size="sm" /> Precios de vuelo
+          </button>
+        </div>
+        <div className="hero-stats">
+          <div><b>{days.toLocaleString('en-US')}</b><span>días faltan</span></div>
+          <div><b>{PEOPLE.length}</b><span>viajeros</span></div>
+          <div><b>{hm(TRIP.totalDriveHours)}</b><span>al volante</span></div>
+          <div><b>{dateLabel.split(' ')[0]}</b><span>fechas</span></div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// Las paradas de la ruta, cada una con su foto. Un tablero de viaje sin las
+// fotos de los sitios nunca se va a ver bien: los nombres solos no transmiten
+// nada de lo que se va a ver.
+function Stops({ go }) {
+  return (
+    <div className="stops">
+      {STOPS.map((s, i) => {
+        const photo = PHOTOS[s.id]
+        const long = s.driveMiles >= 400
+        // No todas las paradas son destino. Bakersfield es una parada técnica,
+        // Oakhurst y American Canyon son puertas de entrada y SFO es la salida.
+        // Una tarjeta sin foto al lado de otra con foto se lee como una imagen
+        // que falló, así que estas se diseñan como un tipo distinto y explícito.
+        if (!photo) {
+          return (
+            <article key={s.id} className="stop-plain" onClick={() => go('itinerary')}>
+              <div className="stop-plain-num">
+                {String(i + 1).padStart(2, '0')}
+              </div>
+              <h3>{s.name}</h3>
+              <div className="stop-plain-meta">
+                {s.nights ? `${s.nights} noche${s.nights > 1 ? 's' : ''}` : s.state}
+                {s.driveMiles ? ` · ${s.driveMiles} mi` : ''}
+              </div>
+              <div className="stop-plain-kind">
+                <Icon name={s.kind === 'salida' ? 'plane' : 'van'} size="sm" />
+                {s.kind === 'salida' ? 'Salida' : 'Punto de paso'}
+              </div>
+            </article>
+          )
+        }
+        return (
+          <article
+            key={s.id}
+            className={'stop-card2' + (photo ? '' : ' no-photo')}
+            onClick={() => go('itinerary')}
+          >
+            {photo && <img src={photo} alt={s.name} loading="lazy" />}
+            <div className="stop-card2-body">
+              <div className="stop-card2-num">
+                {String(i + 1).padStart(2, '0')}
+                {long && <span className="stop-card2-flag">tramo largo</span>}
+              </div>
+              <h3>{s.name}</h3>
+              <div className="stop-card2-meta">
+                {s.nights ? `${s.nights} noche${s.nights > 1 ? 's' : ''}` : s.state}
+                {s.driveMiles ? ` · ${s.driveMiles} mi` : ''}
+              </div>
+            </div>
+          </article>
+        )
+      })}
+    </div>
+  )
+}
+
+// La traza de la ruta en una línea, para leer el recorrido de un vistazo.
 //
 // Cada parada es un nodo sobre una línea de carretera, con su distancia real
 // desde la anterior. Es lo que hace que este tablero se reconozca como el plan
@@ -136,26 +228,15 @@ function Overview({ state, go }) {
 
   return (
     <>
-      <div className="page-head">
-        <h2>Roadtrip USA</h2>
-        {/* El recorrido ya lo cuenta la traza de abajo; repetirlo aquí era
-            ruido. En su lugar, el dato que sí orienta: cuándo es y cuánto dura. */}
-        <p>{TRIP.durationDays} días por el suroeste · {TRIP.year}</p>
-      </div>
+      <Hero dateLabel={dateLabel} go={go} />
 
-      {/* La ruta es la identidad de este tablero: se dibuja como la traza de una
-          carretera con sus paradas reales. Antes esto era una rejilla de cifras
-          que podía pertenecer a cualquier producto. */}
       <RouteBoard dateLabel={dateLabel} go={go} />
 
-      <div className="grid g3 mb14">
-        <div className="stat"><div className="k">Duración</div><div className="v">{TRIP.durationDays} días</div></div>
-        <div className="stat"><div className="k">Distancia</div><div className="v">{TRIP.totalMiles.toLocaleString('en-US')} mi</div></div>
-        <div className="stat"><div className="k">Al volante</div><div className="v">{hm(TRIP.totalDriveHours)}</div></div>
-        <div className="stat"><div className="k">Viajeros</div><div className="v">{PEOPLE.length}</div></div>
-        <div className="stat"><div className="k">Paradas</div><div className="v">{STOPS.length}</div></div>
-        <div className="stat"><div className="k">Faltan</div><div className="v">{daysUntil(TRIP.dateWindow.from).toLocaleString('en-US')} días</div></div>
+      <div className="section-head">
+        <h2>Las paradas</h2>
+        <p>Un vistazo a lo que hay en cada punto del recorrido.</p>
       </div>
+      <Stops go={go} />
 
       {!dates?.startDate && (
         <div className="alert info mb14">

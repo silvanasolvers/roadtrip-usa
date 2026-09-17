@@ -355,7 +355,21 @@ console.log('\nSistema visual')
   }
 
   // El color debe tener intención: un solo acento primario declarado.
-  ok('el sistema declara tokens de color', /--sun:/.test(cssSrc) && /--sage:/.test(cssSrc))
+  ok('el sistema declara tokens de color',
+    /--accent:/.test(cssSrc) && /--ink:/.test(cssSrc) && /--paper:/.test(cssSrc))
+  // Un solo acento cromático fuerte; el resto son semánticos.
+  ok('el acento es un único color declarado', (cssSrc.match(/--accent:/g) || []).length === 1)
+  // Las fotos son contenido real y se sirven del propio servidor (offline).
+  const photosDir = path.join(ROOT, 'public/photos')
+  const photoFiles = existsSync(photosDir) ? readdirSync(photosDir).filter(f => f.endsWith('.jpg')) : []
+  ok('hay fotos reales de los sitios', photoFiles.length >= 6, `(${photoFiles.length} fotos)`)
+  ok('las fotos se sirven local, no desde un CDN externo',
+    /PHOTOS/.test(readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8'))
+    && !/https?:\/\/[^']*\.(jpg|jpeg|png)/.test(appSrcAll))
+  // Tipografía propia alojada aquí: sin señal, una webfont remota no carga.
+  const fontsDir = path.join(ROOT, 'public/fonts')
+  ok('las fuentes se sirven desde el propio servidor',
+    existsSync(fontsDir) && readdirSync(fontsDir).some(f => f.endsWith('.woff2')))
   ok('respeta prefers-reduced-motion',
     /prefers-reduced-motion/.test(cssSrc))
 }

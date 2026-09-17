@@ -18,6 +18,21 @@ export const PEOPLE = [
 
 export const ADMINS = ['jara', 'cata']
 
+// Foto de cada parada. Son imágenes de Wikimedia Commons con licencia libre
+// (dominio público o CC), recortadas a 16:10 y guardadas en el propio servidor:
+// el tablero tiene que abrir sin señal en Zion, Yosemite y la carretera de Page.
+// Créditos completos en /creditos.
+export const PHOTOS = {
+  hero: '/photos/hero.jpg',
+  las: '/photos/lasvegas.jpg',
+  page: '/photos/page.jpg',
+  zion: '/photos/zion.jpg',
+  yosemite: '/photos/yosemite.jpg',
+  napa: '/photos/napa.jpg',
+  goldengate: '/photos/goldengate.jpg',
+  threerivers: '/photos/sequoia.jpg',
+}
+
 // Precio objetivo por persona, ida y vuelta. El viaje es open-jaw (llegan a Las
 // Vegas, salen de San Francisco), así que se compara contra la suma de los dos
 // trayectos cotizados por separado.

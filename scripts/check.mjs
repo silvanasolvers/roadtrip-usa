@@ -360,5 +360,30 @@ console.log('\nSistema visual')
     /prefers-reduced-motion/.test(cssSrc))
 }
 
+console.log('\nCache y despliegue')
+{
+  const srv = readFileSync(path.join(ROOT, 'server/index.js'), 'utf8')
+  const sw = readFileSync(path.join(ROOT, 'public/sw.js'), 'utf8')
+
+  // Un deploy solo se ve si el HTML y el service worker no se cachean. Con un
+  // max-age global el navegador seguía sirviendo el shell viejo — que apunta al
+  // JS viejo — y el rediseño quedaba invisible.
+  ok('el shell (index.html) no se cachea',
+    /no-cache/.test(srv) && /index\.html/.test(srv))
+  ok('index.html y sw.js se sirven sin caché',
+    /sw\.js/.test(srv) && /no-cache/.test(srv))
+  // Los assets llevan hash del build: ahí sí conviene cache largo.
+  ok('los assets con hash se cachean como inmutables',
+    /immutable/.test(srv) && /index-\[A-Za-z0-9_-\]/.test(srv))
+  // El fallback SPA también sirve el shell, así que también debe ir sin caché.
+  const fallback = srv.slice(srv.indexOf('SPA fallback'))
+  ok('el fallback SPA aplica la misma regla', /no-cache/.test(fallback))
+
+  // El service worker no debe quedarse pegado al build anterior.
+  ok('el service worker versiona su caché', /roadtrip-usa-v\d/.test(sw))
+  ok('el service worker no sirve el HTML viejo primero',
+    /network first/i.test(sw) || /network-first/.test(sw))
+}
+
 console.log(failures === 0 ? '\nTodo en orden.\n' : `\n${failures} fallo(s).\n`)
 process.exit(failures === 0 ? 0 : 1)

@@ -492,12 +492,34 @@ app.use((err, _req, res, next) => {
 })
 
 app.use('/data', express.static(DATA_DIR, { setHeaders: r => r.set('Cache-Control', 'no-store') }))
-app.use(express.static(DIST, { maxAge: '1h' }))
+
+// Cache policy. This matters more than it looks: with one blanket max-age the
+// HTML and the service worker got cached too, so a deploy was invisible — the
+// browser kept serving the old shell pointing at the old JS, and never saw the
+// new service worker. Long cache for fingerprinted assets, none for the entry
+// points that decide which assets to load.
+app.use(express.static(DIST, {
+  setHeaders(res, filePath) {
+    const name = path.basename(filePath)
+    // Vite fingerprints these, so a new build is a new URL: safe to cache hard.
+    if (/^index-[A-Za-z0-9_-]+\.(js|css)$/.test(name)) {
+      res.set('Cache-Control', 'public, max-age=31536000, immutable')
+      return
+    }
+    // The shell and the service worker are the update mechanism itself.
+    if (name === 'index.html' || name === 'sw.js' || name === 'manifest.webmanifest') {
+      res.set('Cache-Control', 'no-cache, must-revalidate')
+      return
+    }
+    res.set('Cache-Control', 'public, max-age=3600')
+  },
+}))
 
 // SPA fallback — must stay last so /api and /files keep working.
 app.get(/^\/(?!api|files|data).*/, (_req, res) => {
   const idx = path.join(DIST, 'index.html')
-  if (fs.existsSync(idx)) res.sendFile(idx)
+  // Same rule as above: the shell must never be stale, or a deploy stays invisible.
+  if (fs.existsSync(idx)) res.set('Cache-Control', 'no-cache, must-revalidate').sendFile(idx)
   else res.status(503).send('build no encontrado')
 })
 

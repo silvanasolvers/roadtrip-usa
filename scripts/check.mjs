@@ -15,7 +15,7 @@ const ok = (label, cond, extra = '') => {
 // ---------------------------------------------------------------- route data
 const src = readFileSync(path.join(ROOT, 'src/data/trip.js'), 'utf8')
 const mod = await import(path.join(ROOT, 'src/data/trip.js'))
-const { STOPS, PEOPLE, TRIP, CHECKLIST_SEED, PACKING_SEED, WIKI } = mod
+const { STOPS, PEOPLE, TRIP, CHECKLIST_SEED, PACKING_SEED, WIKI, TARGET_COP } = mod
 
 console.log('\nDatos de la ruta')
 ok('11 paradas cargadas', STOPS.length === 11, `(hay ${STOPS.length})`)
@@ -42,6 +42,13 @@ ok('advierte que Antelope Canyon exige tour guiado', /tour guiado/i.test(allWarn
 ok('advierte del mínimo de 2 vehículos', /2 veh[ií]culos/i.test(allWarn))
 ok('confirma que Yosemite no exige timed-entry', /no exige timed-entry/i.test(allWarn))
 ok('advierte del drop-off fee del one-way', /drop-off/i.test(allWarn))
+
+console.log('\nObjetivo de vuelos (open-jaw)')
+ok('el objetivo está en COP', TARGET_COP === 2000000, `(${TARGET_COP})`)
+// El viaje NO es ida y vuelta: entra por LAS y sale por SFO.
+ok('la primera parada es el aeropuerto de llegada (LAS)', /Harry Reid|Las Vegas/i.test(STOPS[0].place))
+ok('la última parada es el aeropuerto de salida (SFO)', /SFO|San Francisco International/i.test(STOPS[STOPS.length - 1].place))
+ok('llegada y salida son aeropuertos distintos (open-jaw)', STOPS[0].id !== STOPS[STOPS.length - 1].id)
 
 console.log('\nChecklist y packing')
 ok('checklist con tareas reales', CHECKLIST_SEED.length >= 20, `(${CHECKLIST_SEED.length})`)
@@ -93,9 +100,10 @@ if (process.env.CHECK_API) {
     ok('/health responde ok', h.ok === true)
     const s = await fetch(base + '/api/state').then(r => r.json())
     ok('/api/state devuelve el checklist sembrado', (s.checklist || []).length >= 20, `(${s.checklist?.length})`)
-    ok('/api/state trae estructura de vuelos', !!s.flights)
+    ok('/api/state trae estructura de vuelos', !!s.flights && Array.isArray(s.flights.legs))
     const f = await fetch(base + '/api/flights').then(r => r.json())
     ok('/api/flights responde', typeof f === 'object')
+    ok('/api/flights expone objetivo en COP', 'target' in f || 'rate' in f)
   } catch (e) {
     ok('la API responde', false, `(${e.message})`)
   }

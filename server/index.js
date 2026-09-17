@@ -35,16 +35,49 @@ function emptyState() {
     driveAssignments: {}, // { [segmentId]: personId }
     docs: [],             // metadata only; files live in data/uploads
     trips: { startDate: null, endDate: null, confirmed: false },
-    flights: { updatedAt: null, results: [], cheapestByDate: {}, error: null },
+    flights: {
+      updatedAt: null, legs: [], combos: [], cheapestCombo: null,
+      rate: null, target: null, error: null,
+    },
   }
+}
+
+// Bring an older store.json forward. Without this, changing a nested shape
+// (e.g. flights from {results} to {legs,combos}) leaves the running board
+// reading undefined fields and crashing on keys it expects.
+function migrate(s) {
+  const base = emptyState()
+  for (const k of Object.keys(base)) {
+    if (s[k] === undefined) s[k] = base[k]
+  }
+
+  // flights: flat {results,cheapestByDate} -> open-jaw {legs,combos,...}
+  const f = s.flights
+  if (f && (f.legs === undefined || f.combos === undefined)) {
+    const legacy = Array.isArray(f.results) ? f.results : []
+    s.flights = {
+      ...base.flights,
+      updatedAt: f.updatedAt ?? null,
+      // Old results were per-leg one-ways with no leg kind; treat them as
+      // outbound so nothing is silently presented as a return fare.
+      legs: legacy.map(r => ({ ...r, leg: r.leg || 'out' })),
+      error: legacy.length ? null : (f.error ?? null),
+    }
+  }
+
+  // Older entries may predate the `doneBy`/`doneAt` audit fields.
+  for (const c of s.checklist || []) {
+    if (c.done === undefined) c.done = false
+    if (c.doneBy === undefined) c.doneBy = null
+    if (c.doneAt === undefined) c.doneAt = null
+  }
+
+  return s
 }
 
 async function loadState() {
   try {
-    state = JSON.parse(await fsp.readFile(STORE, 'utf8'))
-    for (const k of Object.keys(emptyState())) {
-      if (state[k] === undefined) state[k] = emptyState()[k]
-    }
+    state = migrate(JSON.parse(await fsp.readFile(STORE, 'utf8')))
   } catch {
     state = emptyState()
   }
@@ -249,25 +282,32 @@ api.post('/docs/remove', (req, res) => {
 })
 
 // ------------------------------------------------------------ flight results
+// Shape note: the trip is an open-jaw (arrive LAS, depart SFO), so results are
+// per-leg plus combined outbound+return combos. See scripts/fetch-flights.py
+// for why multi-city is priced as two one-ways.
+const EMPTY_FLIGHTS = {
+  updatedAt: null, legs: [], combos: [], cheapestCombo: null,
+  rate: null, target: null, error: null,
+}
+
 // The scheduled monitor POSTs here (shared secret). Results are also what the
-// calendar view reads to highlight the cheapest departure dates.
+// Flights view reads to show per-date fares and whether the COP target is met.
 api.post('/flights/push', (req, res) => {
   if (!PUSH_SECRET || req.get('x-push-secret') !== PUSH_SECRET) {
     return res.status(401).json({ error: 'no autorizado' })
   }
-  const { results = [], error = null } = req.body || {}
+  const d = req.body || {}
   mutate(s => {
     s.flights = {
       updatedAt: new Date().toISOString(),
-      results,
-      error,
-      cheapestByDate: results.reduce((acc, r) => {
-        const cur = acc[r.date]
-        if (cur === undefined || r.usd < cur) acc[r.date] = r.usd
-        return acc
-      }, {}),
+      legs: d.legs || [],
+      combos: d.combos || [],
+      cheapestCombo: d.cheapestCombo || null,
+      rate: d.rate || null,
+      target: d.target || null,
+      error: d.error || null,
     }
-  }).then(() => res.json({ ok: true, count: results.length }))
+  }).then(() => res.json({ ok: true, legs: (d.legs || []).length, combos: (d.combos || []).length }))
     .catch(e => res.status(500).json({ error: String(e) }))
 })
 
@@ -276,12 +316,12 @@ api.post('/flights/refresh', (req, res) => {
     .then(out => mutate(s => {
       s.flights = {
         updatedAt: new Date().toISOString(),
-        results: out.results || [], error: null,
-        cheapestByDate: (out.results || []).reduce((acc, r) => {
-          const cur = acc[r.date]
-          if (cur === undefined || r.usd < cur) acc[r.date] = r.usd
-          return acc
-        }, {}),
+        legs: out.legs || [],
+        combos: out.combos || [],
+        cheapestCombo: out.cheapestCombo || null,
+        rate: out.rate || null,
+        target: out.target || null,
+        error: (out.errors || []).length ? out.errors.join(' · ') : null,
       }
     }))
     .then(() => res.json({ ok: true, ...state.flights }))

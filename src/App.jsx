@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI } from './data/trip.js'
+import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP } from './data/trip.js'
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
 
@@ -759,25 +759,27 @@ function Packing({ state, send, me }) {
 }
 
 // --------------------------------------------------------------------- flights
-// Dates the live "Consultar precios" button and the daily monitor cover. Kept
-// narrow on purpose: one sampled date per week across the trip's window, both
-// origins, both directions. The full daily sweep lives in the cron job.
-const REFRESH_ROUTES = [
-  { from: 'BOG', to: 'LAS', dates: ['2026-08-15', '2026-09-12', '2026-10-10', '2026-10-17', '2026-10-24'] },
-  { from: 'MDE', to: 'LAS', dates: ['2026-10-17'] },
-  { from: 'BOG', to: 'SFO', dates: ['2026-10-28'] },
-]
+// The trip is an open-jaw: they fly into Las Vegas and home from San Francisco.
+// Multi-city cannot be read from Google via the library, so the board prices it
+// as two one-ways and combines them — which is also how it is usually bought.
+const REFRESH = {
+  outbound: { from: 'BOG', to: 'LAS', dates: ['2026-08-15', '2026-09-12', '2026-10-10', '2026-10-14', '2026-10-17'] },
+  returns: { from: 'SFO', to: 'BOG', dates: ['2026-10-25', '2026-10-28'] },
+  adults: 1,
+  targetCop: TARGET_COP,
+}
 
 function Flights({ state, refresh, status }) {
   const f = state.flights || {}
-  const results = f.results || []
-  const cheapest = results.length ? [...results].sort((a, b) => a.usd - b.usd)[0] : null
-  const byDate = results.reduce((acc, r) => {
-    (acc[r.date] ||= []).push(r)
-    return acc
-  }, {})
+  const legs = f.legs || []
+  const combos = f.combos || []
+  const target = f.target
+  const rate = f.rate?.cop
+  const cheapest = combos[0] || null
   const [fetching, setFetching] = useState(false)
   const [msg, setMsg] = useState(null)
+
+  const cop = usd => rate ? `${Math.round(usd * rate).toLocaleString('en-US')} COP` : null
 
   const askRefresh = async () => {
     setFetching(true); setMsg(null)
@@ -785,11 +787,11 @@ function Flights({ state, refresh, status }) {
       const r = await fetch('/api/flights/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ routes: REFRESH_ROUTES, adults: 1 }),
+        body: JSON.stringify(REFRESH),
       })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`)
-      setMsg(`Se consultaron ${d.results?.length || 0} fechas con datos reales.`)
+      setMsg(`Consultadas ${d.legs?.length || 0} fechas reales · ${d.combos?.length || 0} combinaciones.`)
       await refresh(true)
     } catch (e) {
       setMsg('No se pudo consultar: ' + String(e.message || e))
@@ -798,99 +800,157 @@ function Flights({ state, refresh, status }) {
     }
   }
 
+  const outs = legs.filter(l => l.leg === 'out').sort((a, b) => a.date.localeCompare(b.date))
+  const rets = legs.filter(l => l.leg === 'ret').sort((a, b) => a.date.localeCompare(b.date))
+
   return (
     <>
       <div className="page-head">
         <h2>Vuelos</h2>
-        <p>Precios reales de Google Flights · se actualizan solos todos los días</p>
+        <p>Open-jaw: entran por Las Vegas, salen por San Francisco · precios reales de Google Flights</p>
       </div>
 
-      {!results.length && (
-        <div className="alert info mb14">
-          <span>✈️</span>
-          <div>
-            Todavía no hay precios cargados. El monitor diario llena esta tabla automáticamente;
-            mientras tanto puedes pedir una consulta manual.
-          </div>
-        </div>
-      )}
-
       <div className="card card-pad mb14">
-        <div className="row-between wrapflex">
+        <div className="row-between wrapflex mb14">
           <div>
-            <div className="tiny dim">Última actualización</div>
-            <div className="small">
-              {f.updatedAt ? new Date(f.updatedAt).toLocaleString('es-CO') : 'nunca'}
-            </div>
+            <div className="tiny dim">Objetivo del grupo</div>
+            <div style={{ fontSize: 20, fontWeight: 700 }}>{TARGET_COP.toLocaleString('en-US')} COP</div>
+            <div className="tiny dim">ida y vuelta por persona</div>
           </div>
-          <div className="row">
-            {cheapest && (
-              <div className="stat">
-                <div className="k">Más barato encontrado</div>
-                <div className="v">{usd(cheapest.usd)}</div>
-                <div className="tiny dim">{cheapest.from} → {cheapest.to} · {cheapest.date}</div>
+          {target && (
+            <div className="stat" style={target.met ? { borderColor: 'var(--sage)', background: 'rgba(79,185,138,.08)' } : {}}>
+              <div className="k">{target.met ? 'Objetivo alcanzado' : 'Brecha sobre el objetivo'}</div>
+              <div className="v" style={{ color: target.met ? 'var(--sage)' : 'var(--sun)' }}>
+                {/* A partial push (target without a computed gap) must not render NaN. */}
+                {target.met ? '✓ sí'
+                  : Number.isFinite(target.gapPct) ? `+${target.gapPct}%`
+                  : '—'}
               </div>
-            )}
-            <button className="btn" disabled={fetching} onClick={askRefresh}>
-              {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
-            </button>
-          </div>
+              <div className="tiny dim">
+                {target.met
+                  ? `mejor: ${usd(target.bestUsd)}${target.bestCop ? ` (${target.bestCop.toLocaleString('en-US')} COP)` : ''}`
+                  : Number.isFinite(target.gapUsd)
+                    ? `brecha ${usd(target.gapUsd)} · necesitan ${usd(target.usd)}`
+                    : `necesitan ${usd(target.usd)}`}
+              </div>
+            </div>
+          )}
+          <button className="btn" disabled={fetching} onClick={askRefresh}>
+            {fetching ? <span className="spin" /> : '↻'} {fetching ? 'Consultando…' : 'Consultar precios'}
+          </button>
         </div>
+
+        {rate && (
+          <div className="tiny dim">
+            Tipo de cambio usado: 1 USD = {Math.round(rate).toLocaleString('en-US')} COP
+            {f.rate?.at && <> · {f.rate.at}</>}
+            · actualizado {f.updatedAt ? new Date(f.updatedAt).toLocaleString('es-CO') : 'nunca'}
+          </div>
+        )}
+
         {msg && <div className={'alert ' + (msg.startsWith('No') ? '' : 'good')} style={{ marginTop: 12 }}><span>{msg.startsWith('No') ? '!' : '✓'}</span><div>{msg}</div></div>}
-        {!msg && (
-          <div className="hint" style={{ marginTop: 12 }}>
-            «Consultar precios» hace la búsqueda en vivo para las fechas clave del viaje.
-            Además corre un monitor diario automático que revisa el rango completo y avisa si baja.
+        {!msg && !legs.length && (
+          <div className="alert info" style={{ marginTop: 12 }}>
+            <span>✈️</span>
+            <div>Todavía no hay precios. Pulsa <b>Consultar precios</b> para traer tarifas reales de las fechas clave del viaje.</div>
           </div>
         )}
         {f.error && <div className="alert" style={{ marginTop: 12 }}><span>!</span><div>{f.error}</div></div>}
       </div>
 
-      {Object.keys(byDate).length > 0 && (
-        <div className="card mb14">
-          <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
-            <h3 style={{ fontSize: 15 }}>Precio por fecha</h3>
-          </div>
-          <div style={{ padding: 14 }} className="grid g3">
-            {Object.entries(byDate).sort().map(([date, rs]) => {
-              const best = rs.reduce((a, b) => a.usd < b.usd ? a : b)
-              const isGlobalBest = cheapest && best.usd === cheapest.usd
-              return (
-                <div className="stat" key={date} style={isGlobalBest ? { borderColor: 'var(--sage)', background: 'rgba(79,185,138,.08)' } : {}}>
-                  <div className="k">{new Date(date + 'T12:00').toLocaleDateString('es-CO', { day: 'numeric', month: 'short', weekday: 'short' })}</div>
-                  <div className="v">{usd(best.usd)}</div>
-                  <div className="tiny dim">{best.from} → {best.to} · {best.airlines.join('/')}</div>
-                </div>
-              )
-            })}
+      {cheapest && (
+        <div className="card card-pad mb14">
+          <h3 style={{ fontSize: 15 }} className="mb14">Combinación más barata</h3>
+          <div className="grid g3">
+            <div className="stat">
+              <div className="k">Ida · BOG/MDE → LAS</div>
+              <div className="v" style={{ fontSize: 16 }}>{cheapest.outDate}</div>
+              <div className="tiny dim">{usd(cheapest.outbound.usd)} · {cheapest.outbound.airlines.join('/')}</div>
+            </div>
+            <div className="stat">
+              <div className="k">Regreso · SFO → BOG</div>
+              <div className="v" style={{ fontSize: 16 }}>{cheapest.retDate}</div>
+              <div className="tiny dim">{usd(cheapest.return.usd)} · {cheapest.return.airlines.join('/')}</div>
+            </div>
+            <div className="stat" style={{ borderColor: 'var(--sage)', background: 'rgba(79,185,138,.08)' }}>
+              <div className="k">Total por persona</div>
+              <div className="v">{usd(cheapest.usd)}</div>
+              <div className="tiny dim">{cheapest.days} días {cop(cheapest.usd) && <>· {cop(cheapest.usd)}</>}</div>
+            </div>
           </div>
         </div>
       )}
 
-      {results.length > 0 && (
-        <div className="card">
+      {combos.length > 0 && (
+        <div className="card mb14">
           <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
-            <h3 style={{ fontSize: 15 }}>Detalle ({results.length})</h3>
+            <h3 style={{ fontSize: 15 }}>Todas las combinaciones ({combos.length})</h3>
           </div>
           <table className="tbl">
             <thead>
-              <tr><th>Fecha</th><th>Ruta</th><th>Aerolínea</th><th>Salida→Llegada</th><th>Escalas</th><th style={{ textAlign: 'right' }}>USD</th></tr>
+              <tr>
+                <th>Ida</th><th>Regreso</th><th>Días</th>
+                <th style={{ textAlign: 'right' }}>USD</th>
+                <th style={{ textAlign: 'right' }}>COP</th>
+                <th style={{ textAlign: 'right' }}>vs objetivo</th>
+              </tr>
             </thead>
             <tbody>
-              {[...results].sort((a, b) => a.usd - b.usd).map((r, i) => (
-                <tr key={i}>
-                  <td className="mono nowrap">{r.date}</td>
-                  <td className="mono nowrap">{r.from} → {r.to}</td>
-                  <td className="small">{(r.airlines || []).join(', ')}</td>
-                  <td className="mono small nowrap">{r.dep}→{r.arr}</td>
-                  <td className="small">{r.stops === 0 ? 'directo' : `${r.stops} (${(r.via || []).join('/')})`}</td>
-                  <td className="mono" style={{ textAlign: 'right', fontWeight: 650 }}>{usd(r.usd)}</td>
-                </tr>
-              ))}
+              {combos.map((c, i) => {
+                const diff = target ? c.usd - target.usd : null
+                return (
+                  <tr key={i}>
+                    <td className="mono nowrap">{c.outDate}<div className="tiny dim">{usd(c.outbound.usd)} {c.outbound.airlines.join('/')}</div></td>
+                    <td className="mono nowrap">{c.retDate}<div className="tiny dim">{usd(c.return.usd)} {c.return.airlines.join('/')}</div></td>
+                    <td className="mono">{c.days}</td>
+                    <td className="mono" style={{ textAlign: 'right', fontWeight: 650 }}>{usd(c.usd)}</td>
+                    <td className="mono small nowrap" style={{ textAlign: 'right' }}>{cop(c.usd) || '—'}</td>
+                    <td className="mono small nowrap" style={{
+                      textAlign: 'right',
+                      color: diff === null ? 'var(--txt-3)' : diff <= 0 ? 'var(--sage)' : 'var(--sun)',
+                    }}>
+                      {diff === null ? '—' : diff <= 0 ? '✓ alcanza' : '+' + usd(diff)}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
       )}
+
+      {legs.length > 0 && (
+        <div className="grid g2">
+          {[['Ida — BOG/MDE → Las Vegas', outs], ['Regreso — San Francisco → BOG', rets]].map(([title, list]) => (
+            <div className="card" key={title}>
+              <div style={{ padding: '13px 15px', borderBottom: '1px solid var(--line)' }}>
+                <h3 style={{ fontSize: 15 }}>{title}</h3>
+              </div>
+              {list.map((l, i) => (
+                <div className="item" key={i}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="lbl mono">{l.date}</div>
+                    <div className="tiny dim">
+                      {l.from} → {l.to} · {l.airlines.join('/')} · {l.stops === 0 ? 'directo' : `${l.stops} escala(s) vía ${(l.via || []).join('/')}`}
+                    </div>
+                    <div className="tiny dim mono">{l.dep} → {l.arr} · {Math.floor(l.durMin / 60)}h{l.durMin % 60 ? String(l.durMin % 60).padStart(2, '0') : ''}</div>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div className="mono" style={{ fontWeight: 650 }}>{usd(l.usd)}</div>
+                    {cop(l.usd) && <div className="tiny dim nowrap">{cop(l.usd)}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="hint" style={{ marginTop: 14 }}>
+        <b>Cómo se calcula:</b> este viaje es <i>open-jaw</i> (llegan a Las Vegas, vuelven desde San Francisco), no ida y vuelta.
+        Google no expone el multi-city de forma legible, así que el tablero cotiza los dos trayectos por separado y los combina —
+        que es además la forma más común de comprar este tipo de ruta. Los totales son la suma de dos tiquetes.
+      </div>
     </>
   )
 }

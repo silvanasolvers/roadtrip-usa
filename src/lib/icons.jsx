@@ -58,6 +58,15 @@ const P = {
       <path d="M9.5 9v12M14.5 9v12" />
     </>
   ),
+  // Hospedaje: cama doble vista de frente, mismo trazo que el resto.
+  bed: (
+    <>
+      <path d="M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8" />
+      <path d="M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4" />
+      <path d="M2 18h20" />
+      <path d="M12 4v6" />
+    </>
+  ),
   file: (
     <>
       <path d="M14 3H7.6A1.6 1.6 0 0 0 6 4.6v14.8A1.6 1.6 0 0 0 7.6 21h8.8a1.6 1.6 0 0 0 1.6-1.6V8Z" />

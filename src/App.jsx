@@ -3,6 +3,7 @@ import { PEOPLE, TRIP, STOPS, PACKING_SEED, CATEGORIES, WIKI, TARGET_COP, PHOTOS
 import { useTripState, uploadDoc } from './lib/store.js'
 import { computeBalances, settleUp, usd, km, hm } from './lib/money.js'
 import { Icon } from './lib/icons.jsx'
+import { DEFAULT_DEPARTURE, STAY_NOTES, GENERAL_STAY_NOTE, departureRange, stayDates, tripNights, stayLinks, calendarStatus } from './lib/stays.js'
 
 // ---------------------------------------------------------------- primitives
 const byId = id => PEOPLE.find(p => p.id === id)
@@ -1214,6 +1215,209 @@ function Flights({ state, refresh, status }) {
   )
 }
 
+// ------------------------------------------------------------------- stays
+// Hospedaje por parada.
+//
+// Ni Booking ni Airbnb exponen una API pública de búsqueda. Lo que sí aceptan
+// es una consulta pre-armada por URL: el tablero calcula el tramo de cada
+// parada (noches encadenadas a partir de la salida), arma el enlace con las
+// fechas y la ocupación real de los 8 — casa completa con 4+ recámaras en
+// Airbnb, 4 habitaciones en Booking — y lo abre en la plataforma. La capa
+// inteligente es el calendario: qué lodge de parque hay que asegurar primero y
+// la fecha exacta en que su ventana se abre para estas fechas.
+function Stays({ state }) {
+  const confirmed = state?.trips?.startDate || ''
+  const [departure, setDeparture] = useState(() => confirmed || DEFAULT_DEPARTURE)
+  const [showCal, setShowCal] = useState(true)
+
+  const range = useMemo(() => departureRange(), [])
+  const stays = useMemo(() => stayDates(departure), [departure])
+  const totals = useMemo(() => tripNights(departure), [departure])
+  const cal = useMemo(() => calendarStatus(departure), [departure])
+
+  const fmt = (iso, opts) => new Date(`${iso}T00:00:00Z`)
+    .toLocaleDateString('es-CO', { ...(opts || { day: 'numeric', month: 'short' }), timeZone: 'UTC' })
+
+  const setDep = v => {
+    if (!v) return
+    setDeparture(v < range.min ? range.min : v > range.max ? range.max : v)
+  }
+
+  const lodging = stays.filter(s => s.nights > 0)
+  const parkWindow = Object.fromEntries(cal.items.map(i => [i.stopId, i]))
+  const openNow = cal.items.filter(i => i.opensOn <= cal.today)
+
+  return (
+    <>
+      <div className="page-head">
+        <h2>Hospedaje</h2>
+        <p>
+          Búsqueda por parada con las fechas de cada tramo y la ocupación de los 8 ya puestas:
+          casa completa de 4+ recámaras en Airbnb, 4 habitaciones en Booking.
+        </p>
+      </div>
+
+      <div className="card card-pad mb14">
+        <div className="row-between wrapflex" style={{ gap: 14 }}>
+          <div>
+            <div className="tiny dim">Inicio del viaje · llegada a Las Vegas</div>
+            <input
+              className="input mono" type="date" style={{ maxWidth: 185, marginTop: 5 }}
+              min={range.min} max={range.max} value={departure}
+              onChange={e => setDep(e.target.value)}
+            />
+            <div className="tiny dim" style={{ marginTop: 5 }}>
+              Fechas posibles de inicio: {fmt(range.min, { day: 'numeric', month: 'short', year: 'numeric' })}
+              {' → '}{fmt(range.max, { day: 'numeric', month: 'short', year: 'numeric' })}
+            </div>
+          </div>
+          <div className="stay-nights"><b>{lodging.length}</b><span>alojamientos</span></div>
+          <div className="stay-nights"><b>{totals.totalNights}</b><span>noches</span></div>
+          <div className="stay-nights"><b>{fmt(totals.lastCheckOut)}</b><span>último check-out</span></div>
+        </div>
+
+        {confirmed && confirmed !== departure && (
+          <button className="btn btn-sm" style={{ marginTop: 12 }} onClick={() => setDeparture(confirmed)}>
+            <Icon name="calendar" size="sm" /> Usar las fechas confirmadas ({confirmed})
+          </button>
+        )}
+
+        <div className={'alert ' + (openNow.length ? 'good' : 'info')} style={{ marginTop: 14 }}>
+          <Icon name="bed" size="md" />
+          <div>
+            {openNow.length ? (
+              <>
+                <b>{openNow.length} de {cal.total} ventanas de los lodges de parque ya están abiertas para
+                estas fechas.</b> Son los alojamientos que primero se agotan: vale la pena asegurarlos en
+                cuanto las fechas estén firmes, mirando una política de cancelación que dé flexibilidad.
+              </>
+            ) : (
+              <>
+                <b>Las ventanas de los lodges de parque todavía no abren para estas fechas.</b>{' '}
+                {cal.next && (
+                  <>La primera se abre el{' '}
+                    <b>{fmt(cal.next.opensOn, { day: 'numeric', month: 'long', year: 'numeric' })}</b>{' '}
+                    (en {daysUntil(cal.next.opensOn)} días): {cal.next.windowLabel}.</>
+                )}{' '}
+                Booking y Airbnb se pueden mirar desde ya: abren disponibilidad rodante.
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="grid g2 mb14">
+        {lodging.map(s => {
+          const links = stayLinks(s.stopId, s.checkIn, s.checkOut)
+          const w = parkWindow[s.stopId]
+          return (
+            <div className="card stay-card" key={s.stopId}>
+              <div className="stay-head">
+                <div className="stay-no" style={{ paddingTop: 3 }}>{String(s.order + 1).padStart(2, '0')}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="stay-title">
+                    {s.name}
+                    <span className={'tag tag-' + s.kind}>{s.kind}</span>
+                  </div>
+                  <div className="tiny dim" style={{ marginTop: 2 }}>{s.state}</div>
+                  <div className="small mono" style={{ marginTop: 7 }}>
+                    {fmt(s.checkIn)} → {fmt(s.checkOut)}
+                  </div>
+                </div>
+                <div className="stay-nights">
+                  <b>{s.nights}</b>
+                  <span>noche{s.nights > 1 ? 's' : ''}</span>
+                </div>
+              </div>
+              <div className="stay-body">
+                <p className="small muted" style={{ margin: '0 0 12px' }}>{STAY_NOTES[s.stopId]}</p>
+                <div className="stay-links">
+                  <a className="btn btn-sm" href={links.booking} target="_blank" rel="noreferrer">
+                    <Icon name="external" size="sm" /> Booking
+                  </a>
+                  <a className="btn btn-sm" href={links.airbnb} target="_blank" rel="noreferrer">
+                    <Icon name="external" size="sm" /> Airbnb
+                  </a>
+                </div>
+                {w && (
+                  <div className="hint" style={{ marginTop: 11 }}>
+                    <b>Ventana del lodge:</b>{' '}
+                    {w.opensOn <= cal.today
+                      ? 'ya abierta'
+                      : <>abre el <b>{fmt(w.opensOn, { day: 'numeric', month: 'short', year: 'numeric' })}</b></>}
+                    {' · '}{w.days} días ·{' '}
+                    <a href={w.url} target="_blank" rel="noreferrer">sitio oficial</a>
+                  </div>
+                )}
+                {links.nearby.length > 0 && (
+                  <div className="stay-near">
+                    <div className="tiny dim">Alternativas cercanas (distancia real en auto):</div>
+                    {links.nearby.map(n => (
+                      <div key={n.label} className="small" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <b>{n.label}</b> <span className="dim tiny">{n.minutes} min</span>
+                        <span className="spacer" />
+                        <a className="tiny" href={n.booking} target="_blank" rel="noreferrer">Booking</a>
+                        <a className="tiny" href={n.airbnb} target="_blank" rel="noreferrer">Airbnb</a>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="card mb14">
+        <div className="row-between wrapflex" style={{ padding: '13px 15px', borderBottom: showCal ? '1px solid var(--line)' : 'none' }}>
+          <div>
+            <h3 style={{ fontSize: 15 }}>Cuándo reservar cada alojamiento de parque</h3>
+            <p className="tiny dim" style={{ margin: '4px 0 0' }}>
+              Ventanas exactas para estas fechas, en orden de apertura.
+            </p>
+          </div>
+          <button className="btn btn-sm" onClick={() => setShowCal(o => !o)}>
+            {showCal ? 'Ocultar' : 'Mostrar'}
+          </button>
+        </div>
+        {showCal && (
+          <div className="tbl-scroll">
+            <table className="tbl">
+              <thead>
+                <tr><th>Se abre</th><th>Alojamiento</th><th>Parada</th><th>Tramo</th><th>Estado</th></tr>
+              </thead>
+              <tbody>
+                {cal.items.map(i => (
+                  <tr key={i.windowId + '-' + i.stopId}>
+                    <td className="mono nowrap">{i.opensOn}</td>
+                    <td>
+                      <b>{i.windowLabel}</b>
+                      <div className="tiny dim">{i.days} días de ventana</div>
+                    </td>
+                    <td>{i.name}</td>
+                    <td className="mono tiny nowrap">{i.checkIn} → {i.checkOut}</td>
+                    <td>
+                      {i.opensOn <= cal.today
+                        ? <span className="chip ok">abierta</span>
+                        : <span className="chip">en {daysUntil(i.opensOn)} días</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="hint">
+        <b>Cómo funciona:</b> Booking y Airbnb no tienen API pública de búsqueda, así que el tablero
+        arma la consulta con las fechas y la ocupación reales y la abre en la plataforma — los
+        resultados y precios se ven allá, en vivo. {GENERAL_STAY_NOTE}
+      </div>
+    </>
+  )
+}
+
 // ------------------------------------------------------------------- documents
 function Documents({ state, send, me, refresh }) {
   const [busy, setBusy] = useState(false)
@@ -1314,6 +1518,7 @@ const TABS = [
   { id: 'itinerary', label: 'Itinerario', ic: 'route' },
   { id: 'map', label: 'Mapa', ic: 'pin' },
   { id: 'flights', label: 'Vuelos', ic: 'plane' },
+  { id: 'stays', label: 'Hospedaje', ic: 'bed' },
   { id: 'checklist', label: 'Checklist', ic: 'clipboard' },
   { id: 'expenses', label: 'Gastos', ic: 'wallet' },
   { id: 'packing', label: 'Maletas', ic: 'luggage' },
@@ -1385,6 +1590,7 @@ export default function App() {
         {tab === 'itinerary' && <Itinerary state={state} send={send} me={me} />}
         {tab === 'map' && <MapView state={state} />}
         {tab === 'flights' && <Flights state={state} refresh={refresh} status={status} />}
+        {tab === 'stays' && <Stays state={state} />}
         {tab === 'checklist' && <Checklist state={state} send={send} me={me} />}
         {tab === 'expenses' && <Expenses state={state} send={send} me={me} />}
         {tab === 'packing' && <Packing state={state} send={send} me={me} />}

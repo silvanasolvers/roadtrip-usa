@@ -1,4 +1,4 @@
-# Roadtrip USA 2026 — tablero del viaje
+# Roadtrip USA 2027 — tablero del viaje
 
 Tablero compartido para el roadtrip **Las Vegas → Page → Zion → Sequoia → Yosemite → Napa → San Francisco**.
 
@@ -10,6 +10,7 @@ Ruta original: https://maps.app.goo.gl/x5T75ni1JyGSMEra6
 - **Itinerario** — las 11 paradas con distancias/horas reales por tramo, qué hacer, advertencias, costo y notas del grupo.
 - **Mapa** — proyección propia de la ruta con paradas clicables (sin dependencias externas, funciona offline).
 - **Vuelos** — precios reales de Google Flights por fecha, para decidir cuándo comprar.
+- **Hospedaje** — búsqueda pre-armada de Booking y Airbnb por parada: fechas del tramo, ocupación de los 8 (casa completa de 4+ recámaras / 4 habitaciones), alternativas cercanas con distancia real y el calendario de cuándo abre la ventana de cada lodge de parque.
 - **Checklist** — tareas de preparación con responsable y estado.
 - **Gastos** — quién pagó qué, división por subconjunto del grupo y liquidación minimizada.
 - **Maletas** — packing list compartida, cada persona marca lo suyo.
@@ -21,6 +22,7 @@ Ruta original: https://maps.app.goo.gl/x5T75ni1JyGSMEra6
 - **Multi-usuario real:** el estado vive en el servidor (`data/store.json`), no en el navegador. Los 8 ven lo mismo, con polling cada 8 s que se pausa mientras hay una escritura en vuelo.
 - **Offline:** es una PWA con service worker. En Zion Canyon, Yosemite Valley y la carretera de Page no hay señal; el tablero abre y muestra el último estado sincronizado.
 - **Sin dependencias de mapas:** el mapa es un SVG con proyección equirectangular. Nada de Google Maps SDK, nada de API keys, y funciona sin red.
+- **Hospedaje sin API:** ni Booking ni Airbnb tienen API pública de búsqueda (Booking además bloquea el acceso automatizado). El tablero arma la consulta con las fechas y la ocupación reales y la abre en la plataforma, donde resultados y precios se ven en vivo. Lo que aporta el tablero es el cálculo: noches encadenadas por tramo, filtros correctos por plataforma y las ventanas reales de reserva de los lodges dentro de los parques (366 días en Yosemite y Sequoia, 12 meses en Zion Lodge).
 
 ## Comandos
 

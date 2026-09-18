@@ -589,6 +589,36 @@ table.tbl tr:hover td { background: var(--paper); }
 .plan-row-pending td { color: var(--ink-2); }
 .plan-month { font-size: 11.5px; font-weight: 650; text-transform: capitalize; color: var(--ink-3); }
 
+/* --------------------------------------------------------------- hospedaje */
+/* Tarjetas por parada para la búsqueda de alojamiento. La fecha del tramo va
+   en una franja propia para que se lea de un vistazo, y los botones abren la
+   búsqueda filtrada en cada plataforma. */
+.stay-card { overflow: hidden; }
+.stay-head {
+  padding: 14px 16px; display: flex; align-items: flex-start; gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.stay-title {
+  font-size: 16.5px; font-family: var(--display); font-weight: 700;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; letter-spacing: -.015em;
+}
+.stay-no { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--ink-3); letter-spacing: .04em; }
+.stay-nights { text-align: right; flex: none; }
+.stay-nights b { font-family: var(--display); font-size: 21px; font-weight: 700; letter-spacing: -.02em; }
+.stay-nights span {
+  display: block; font-size: 10px; color: var(--ink-3); text-transform: uppercase;
+  letter-spacing: .08em; font-weight: 650;
+}
+.stay-body { padding: 14px 16px 16px; }
+.stay-links { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.stay-near {
+  margin-top: 12px; padding-top: 11px; border-top: 1px dashed var(--line);
+  display: flex; flex-direction: column; gap: 6px;
+}
+a.btn { text-decoration: none; }
+a.btn:hover { text-decoration: none; }
+.tbl-scroll { overflow-x: auto; }
+
 /* ----------------------------------------------------------------- credits */
 .credit-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .credit-item { display: flex; gap: 10px; align-items: center; font-size: 12.5px; }

@@ -144,6 +144,81 @@ ok('la ventana de fechas es de 2027', TRIP.dateWindow.from.startsWith('2027-') &
     /minTripDays: len/.test(appSrc) || /minTripDays/.test(appSrc))
 }
 
+console.log('\nHospedaje (búsqueda Booking / Airbnb)')
+{
+  const S = await import(path.join(ROOT, 'src/lib/stays.js'))
+  const { stayDates, tripNights, stayLinks, bookingCalendar, calendarStatus,
+          departureRange, DEFAULT_DEPARTURE, BOOKING_WINDOWS } = S
+  const plusDays = (d, n) => new Date(new Date(`${d}T00:00:00Z`).getTime() + n * 86400000)
+    .toISOString().slice(0, 10)
+
+  const dated = stayDates(DEFAULT_DEPARTURE)
+  const lodging = dated.filter(d => d.nights > 0)
+  const withNights = STOPS.filter(s => s.nights > 0)
+
+  // El hospedaje se encadena desde la salida: cada check-in es el check-out
+  // del tramo anterior, y las paradas de paso no reciben alojamiento.
+  ok('cada parada con noches tiene su tramo', lodging.length === withNights.length,
+    `(${lodging.length}/${withNights.length})`)
+  ok('las paradas de paso no reciben alojamiento',
+    dated.filter(d => !d.nights).every(d => d.checkOut === null))
+  ok('el encadenado de noches es continuo',
+    lodging.every((d, i) => i === 0 || d.checkIn === lodging[i - 1].checkOut))
+  const routeNights = STOPS.reduce((n, s) => n + (s.nights || 0), 0)
+  const totals = tripNights(DEFAULT_DEPARTURE)
+  ok('el total de noches coincide con la ruta', totals.totalNights === routeNights,
+    `(${totals.totalNights} vs ${routeNights})`)
+  ok('la última salida cae dentro de la ventana del viaje', totals.lastCheckOut <= TRIP.dateWindow.to)
+
+  // Las fechas se calculan: mover la salida corre todos los tramos en bloque.
+  const shift = 7
+  const moved = stayDates(plusDays(DEFAULT_DEPARTURE, shift)).filter(d => d.nights > 0)
+  ok('mover la salida corre todas las fechas',
+    moved.every((d, i) => d.checkIn === plusDays(lodging[i].checkIn, shift)))
+
+  // Enlaces: fechas exactas y ocupación real; sin marcadores vacíos.
+  const all = lodging.map(d => ({ d, l: stayLinks(d.stopId, d.checkIn, d.checkOut) }))
+  ok('cada parada genera enlaces de Booking y Airbnb',
+    all.every(({ l }) => l.booking && l.airbnb))
+  ok('ningún enlace queda con undefined',
+    all.every(({ l }) => !/undefined|null/.test(l.booking) && !/undefined|null/.test(l.airbnb)))
+  ok('las fechas de los enlaces van en ISO',
+    all.every(({ d, l }) => l.booking.includes(`checkin=${d.checkIn}`)
+      && l.airbnb.includes(`checkin=${d.checkIn}`) && l.airbnb.includes(`checkout=${d.checkOut}`)))
+  ok('Airbnb lleva 8 huéspedes y casa completa de 4+ recámaras',
+    all.every(({ l }) => /adults=8/.test(l.airbnb) && /min_bedrooms=4/.test(l.airbnb) && /room_types/.test(l.airbnb)))
+  ok('Booking lleva 8 adultos en 4 habitaciones',
+    all.every(({ l }) => /group_adults=8/.test(l.booking) && /no_rooms=4/.test(l.booking)))
+
+  // Ventanas de reserva de los lodges de parque: se calculan desde el check-in
+  // de cada tramo, nunca se escriben a mano.
+  const cal = bookingCalendar(DEFAULT_DEPARTURE)
+  ok('el calendario cubre las ventanas declaradas', cal.length === BOOKING_WINDOWS.length,
+    `(${cal.length} de ${BOOKING_WINDOWS.length})`)
+  ok('cada ventana abre antes de su check-in', cal.every(i => i.opensOn < i.checkIn))
+  ok('cada ventana respeta su número de días',
+    cal.every(i => i.opensOn === plusDays(i.checkIn, -i.days)))
+  ok('las ventanas salen ordenadas por apertura',
+    cal.every((i, k) => k === 0 || i.opensOn >= cal[k - 1].opensOn))
+  const st = calendarStatus(DEFAULT_DEPARTURE)
+  ok('el resumen cuenta las abiertas contra hoy',
+    st.openNow === st.items.filter(i => i.opensOn <= st.today).length)
+  ok('la próxima ventana, si existe, es futura',
+    !st.next || st.next.opensOn > st.today)
+
+  // Rango de salida para el selector de fecha de la vista.
+  const range = departureRange()
+  ok('el rango de salida respeta la ventana del viaje',
+    range.min === TRIP.dateWindow.from && range.max <= TRIP.dateWindow.to
+      && plusDays(range.max, totals.totalNights) <= TRIP.dateWindow.to,
+    `(${range.min} → ${range.max})`)
+
+  // La pestaña debe estar cableada: vista, nav e icono.
+  const appSrc2 = readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')
+  ok('la pestaña Hospedaje está en la navegación', /id: 'stays', label: 'Hospedaje', ic: 'bed'/.test(appSrc2))
+  ok('la vista Stays está conectada', /tab === 'stays' && <Stays/.test(appSrc2))
+}
+
 console.log('\nChecklist y packing')
 ok('checklist con tareas reales', CHECKLIST_SEED.length >= 20, `(${CHECKLIST_SEED.length})`)
 ok('ids de checklist únicos', new Set(CHECKLIST_SEED.map(c => c.id)).size === CHECKLIST_SEED.length)
